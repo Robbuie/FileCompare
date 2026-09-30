@@ -18,6 +18,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from app.core import folders
 from app.core.loader import Envelope, Loader
+from app.io import handoff as io_handoff
 from app.io import walk as io_walk
 
 LEFT, RIGHT = 0, 1
@@ -56,6 +57,14 @@ class FolderSession(QObject):
 
     changed = Signal()
     progressed = Signal()
+    #: 1.0: a line about the sync handed to File Manager -- sent, refused,
+    #: finished -- for the status bar.
+    handed = Signal(str)
+    #: 1.0: whether each side is on a share, `(left, right)`, for the preview.
+    remote = Signal(object)
+
+    #: Seconds between looks for File Manager's result file.
+    POLL = 2.0
 
     #: Seconds between looks at the walks' progress.
     TICK = 0.25
@@ -80,6 +89,16 @@ class FolderSession(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(int(self.TICK * 1000))
         self._timer.timeout.connect(self._tick)
+        # 1.0: the sync handoff. One request outstanding per tab: the tree
+        # is walked again when its result arrives, and a second sync planned
+        # from the tree before that would be planned from stale verdicts.
+        self._send_request = 0
+        self._poll_request = 0
+        self._remote_request = 0
+        self.pending = ""                # the request file File Manager has
+        self._poll = QTimer(self)
+        self._poll.setInterval(int(self.POLL * 1000))
+        self._poll.timeout.connect(self._look_for_result)
 
     # ------------------------------------------------------------ the state
 
@@ -163,11 +182,74 @@ class FolderSession(QObject):
         self.content = None
 
     def stop(self) -> None:
+        self._poll.stop()
         for side in self.sides:
             if side.progress is not None:
                 side.progress.cancel.set()
         self.cancel_contents()
         self._timer.stop()
+
+    # ------------------------------------------------------ sync handoff
+
+    @property
+    def syncing(self) -> bool:
+        return bool(self._send_request or self.pending)
+
+    def check_remote(self) -> None:
+        """Ask whether either side is on a share; `remote` answers."""
+        self._remote_request = self._loader.submit(
+            io_handoff.remote_sides, self.sides[0].path, self.sides[1].path)
+
+    def send_sync(self, request: dict) -> bool:
+        """Hand the jobs to File Manager. False if one is already out."""
+        if self.syncing or not request.get("jobs"):
+            return False
+        self._send_request = self._loader.submit(io_handoff.send, request)
+        self.handed.emit("Sending to File Manager...")
+        return True
+
+    def forget_sync(self) -> None:
+        """Stop waiting for File Manager's result. The jobs, if File Manager
+        took them, carry on in its queue; only this tab stops listening --
+        for a File Manager older than 0.46, which never writes one."""
+        self._poll.stop()
+        self.pending = ""
+        self._poll_request = 0
+        self.changed.emit()
+
+    def _look_for_result(self) -> None:
+        if self.pending and not self._poll_request:
+            self._poll_request = self._loader.submit(io_handoff.result, self.pending)
+
+    def _handoff_answer(self, request: int, envelope: Envelope) -> bool:
+        if request == self._remote_request:
+            self._remote_request = 0
+            self.remote.emit(envelope.value if envelope.ok else (False, False))
+            return True
+        if request == self._send_request:
+            self._send_request = 0
+            if envelope.ok:
+                self.pending, _program = envelope.value
+                self._poll.start()
+                self.handed.emit("Handed to File Manager's queue. This comparison "
+                                 "is read again when the jobs finish.")
+            else:
+                self.handed.emit("Could not hand the sync to File Manager: "
+                                 + (envelope.error.split(": ", 1)[-1] if envelope.error
+                                    else "unknown"))
+            self.changed.emit()
+            return True
+        if request == self._poll_request:
+            self._poll_request = 0
+            outcome = envelope.value if envelope.ok else None
+            if outcome is None:
+                return True
+            self._poll.stop()
+            self.pending = ""
+            self.handed.emit(describe(outcome))
+            self.start()
+            return True
+        return False
 
     def paths(self, node: folders.Node) -> tuple[str, str]:
         return _join(self.sides[0].path, node.rel), _join(self.sides[1].path, node.rel)
@@ -211,6 +293,8 @@ class FolderSession(QObject):
 
     def _finished(self, request: int, envelope: Envelope) -> None:
         if not request:
+            return
+        if self._handoff_answer(request, envelope):
             return
         for side in self.sides:
             if side.request == request:
@@ -260,6 +344,19 @@ class FolderSession(QObject):
             _build_job, self.sides[0].entries, self.sides[1].entries, self.mask,
             folders.TOLERANCE)
         self.changed.emit()
+
+
+def describe(outcome: dict) -> str:
+    """File Manager's result, in one line."""
+    parts = [f"{int(outcome.get('copied', 0)):,} copied"]
+    for key in ("skipped", "failed"):
+        if outcome.get(key):
+            parts.append(f"{int(outcome[key]):,} {key}")
+    if outcome.get("cancelled"):
+        parts.append("cancelled part way")
+    for why in outcome.get("refused") or []:
+        parts.append(f"refused: {why}")
+    return "File Manager finished the sync: " + ", ".join(parts) + ". Read both folders again."
 
 
 def _join(root: str, rel: str) -> str:

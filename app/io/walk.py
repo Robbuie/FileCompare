@@ -78,16 +78,18 @@ def walk(root: str, progress: Progress | None = None) -> list[Entry]:
             child = f"{rel}\\{item.name}" if rel else item.name
             try:
                 is_dir = item.is_dir(follow_symlinks=False)
+                link = item.is_symlink() or _is_junction(item)
                 if is_dir:
-                    out.append(Entry(rel=child, is_dir=True))
-                    if not item.is_symlink() and not _is_junction(item):
+                    out.append(Entry(rel=child, is_dir=True, is_link=link))
+                    if not link:
                         stack.append((child, item.path))
                     continue
                 info = item.stat(follow_symlinks=False)
             except OSError as exc:
                 out.append(Entry(rel=child, is_dir=False, error=_reason(exc)))
                 continue
-            out.append(Entry(rel=child, is_dir=False, size=info.st_size, mtime=info.st_mtime))
+            out.append(Entry(rel=child, is_dir=False, size=info.st_size, mtime=info.st_mtime,
+                             is_link=link))
             progress.files += 1
     progress.done = True
     return out

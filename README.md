@@ -24,7 +24,10 @@ than by row.
   difference out rather than hide it.
 - **Folders**: both trees merged into one, with File Manager's verdicts
   (names without case, times within two seconds), filters, name masks, and a
-  content compare for the pairs size and time cannot settle.
+  content compare for the pairs size and time cannot settle. **Sync** one
+  way or mirror, or copy and remove picked rows: previewed here with a box
+  beside every action, then run by File Manager's queue (File Manager 0.46
+  or later).
 - **Logix exports (.L5X)** by structure: export dates ignored, tags and
   programs sorted, rung numbers kept out of the way, and every difference
   named by program, routine and rung. XML, JSON and INI by structure too.
@@ -66,6 +69,13 @@ File Manager 0.41 and later start File Compare from its compare commands:
 Ctrl+F2 compares the two panes, Alt+F2 the marked files. Beyond Compare and
 then WinMerge are used on a machine without File Compare. Pressing the key
 again while File Compare is open adds a tab to the window already open.
+
+The other way round, File Compare's folder sync is carried out by File
+Manager: File Compare shows the plan, and on "Send to File Manager" writes it
+to a small file under `%LOCALAPPDATA%\FileCompare\handoff` and starts
+`FileManager.exe --queue <file>`. The jobs run in File Manager's queue with
+its pause, cancel and retry, and File Compare reads both folders again when
+they finish.
 
 ## With git
 

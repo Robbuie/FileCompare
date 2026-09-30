@@ -150,7 +150,10 @@ Holds what the UI renders.
 - `core/folders.py` -- folder compare's merged tree and its verdicts, masks
   and show filters. Pure, like the engine.
 - `core/folderdiff.py` -- one folder comparison: two walks with a stall
-  deadline, the tree built off the UI thread, a content compare.
+  deadline, the tree built off the UI thread, a content compare, and (1.0)
+  the sync handed to File Manager and the wait for its result.
+- `core/syncplan.py` -- update, mirror and picked-row plans from the tree,
+  and the request File Manager's `core/handoff.py` reads. Pure.
 - `core/document.py` -- one side's text while it is edited: lines, their
   endings, and undo/redo as splices. Pure; the tests prove it alone.
 - `core/loader.py` -- runs work off the UI thread and hands the answer back
@@ -168,6 +171,8 @@ Holds what the UI renders.
   endings, write beside, check the file did not move, rename.
 - `io/walk.py` -- a tree by `os.scandir`, junctions listed and not
   followed, cancellable; and "are these two files the same bytes".
+- `io/handoff.py` -- write a sync request, start `FileManager.exe --queue`,
+  read the result File Manager writes beside it.
 - Later, if dead shares make it worth it: `io/worker.py` / `io/pool.py`
   ported from File Manager, so a walk stuck in SMB can be killed rather than
   abandoned.
@@ -237,8 +242,9 @@ by what was opened and can be switched from the tab's header.
 - Filters: name masks, show only differences, only one side, hide equal
   folders.
 - Enter on a pair opens it in a new tab in the right mode.
-- Folder actions (copy across, delete) are **not** in the first versions. See
-  Open decisions.
+- Sync (1.0): update, mirror and picked rows, previewed in
+  `ui/syncdialog.py` and run by File Manager's queue. See "Working with File
+  Manager".
 
 **Hex / binary** -- side by side, aligned by offset, differing bytes marked.
 The fallback for anything that will not decode, and the right answer for
@@ -425,6 +431,20 @@ made in a worker, not in the argument parser.
   what git reads as "merge not resolved".
 - **Explorer**, later: "Select left side" and "Compare to <left>" as ordinary
   per-user registry verbs. No shell extension DLL.
+- **Folder sync runs in File Manager's queue** (1.0, File Manager 0.46). This
+  application never copies or removes a file: `core/syncplan.py` plans,
+  `ui/syncdialog.py` shows every action with a box, and `io/handoff.py`
+  writes the ticked ones as `{"version": 1, "jobs": [...]}` -- at most one
+  copy job (`sources`, `destination`, `into`, `conflict`) and one recycle
+  job -- under `%LOCALAPPDATA%\FileCompare\handoff`, then starts
+  `FileManager.exe --queue <file>`. File Manager refuses the whole request
+  unless every part is a copy or a recycle of full paths landing under the
+  destination, so **the request format is a contract with that repo**:
+  change it there and here in the same sitting, and bump `version`. When the
+  jobs end File Manager writes `<name>.result.json` beside the request;
+  `FolderSession` polls for it every two seconds, then walks again. File
+  Manager shows no second dialog, which is why nothing is sent here that the
+  preview did not show ticked.
 
 ## Conventions
 
@@ -562,12 +582,7 @@ made in a worker, not in the argument parser.
 
 ## Open decisions
 
-- **Folder sync actions.** Copying and deleting from the folder view is what
-  Beyond Compare does, and File Manager's rule is that there is never a second
-  implementation of a destructive operation. The two ways out: hand the plan
-  to File Manager's queue (needs a handoff File Manager does not have yet), or
-  vendor File Manager's copy engine here with its invariants intact. Decide
-  before step 10, not during it.
+- **Folder sync actions** -- decided (1.0): handed to File Manager's queue.
 - **Dependencies to approve**, each only when its step arrives:
   `Pillow` (image compare; File Manager already ships it),
   `charset-normalizer` (encoding detection beyond BOM and UTF-8),

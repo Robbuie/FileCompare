@@ -114,6 +114,66 @@ def render(out: str, *, pair=DEFAULT_PAIR, start: bool = False, theme="dark",
     return out
 
 
+def sample_folders() -> tuple[str, str]:
+    """Two small trees that differ in every way a sync cares about."""
+    base = tempfile.mkdtemp()
+    left, right = os.path.join(base, "Jobs"), os.path.join(base, "Backup")
+    files = {
+        left: {"Line 3\\Cell4.L5X": "a" * 900, "Line 3\\notes.txt": "new",
+               "HMI\\screens.mer": "m" * 4000, "same.ini": "x", "only-left.csv": "1,2"},
+        right: {"Line 3\\Cell4.L5X": "a" * 800, "Line 3\\notes.txt": "old",
+                "same.ini": "x", "Retired\\old.L5X": "r" * 300, "only-right.txt": "z"},
+    }
+    now = time.time()
+    for root, found in files.items():
+        for rel, text in found.items():
+            path = os.path.join(root, *rel.split("\\"))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as out:
+                out.write(text)
+            age = 0 if root == left else 86400
+            os.utime(path, (now - age, now - age))
+    same = [os.path.join(r, "same.ini") for r in (left, right)]
+    for path in same:
+        os.utime(path, (now - 5000, now - 5000))
+    return left, right
+
+
+def render_sync(out: str, mode: str, theme="dark", accent="blue", density="normal",
+                width=1400, height=820) -> str:
+    """The folder view, and beside it (`<out>-dialog.png`) the sync preview."""
+    from app.core import syncplan as S
+    from app.ui.syncdialog import SyncDialog
+
+    app, window = build(theme, accent, density, width, height)
+    left, right = sample_folders()
+    window.compare(left, right)
+    window.show()
+    page = window.pages.currentWidget()
+    end = time.monotonic() + 10
+    while time.monotonic() < end:
+        app.processEvents()
+        view = getattr(page, "folders", None)
+        if view is not None and view.session.tree is not None and not view.session.busy:
+            break
+        time.sleep(0.02)
+    settle(app, window, 1)
+    window.grab().save(out)
+    view = page.folders
+    dialog = SyncDialog(view.session.tree, left, right,
+                        mode=S.MIRROR if mode == "mirror" else S.UPDATE,
+                        tokens=view.model.tokens, parent=window)
+    dialog.set_remote((False, False))
+    dialog.show()
+    for _ in range(5):
+        app.processEvents()
+    second = os.path.splitext(out)[0] + "-dialog.png"
+    dialog.grab().save(second)
+    dialog.close()
+    window.close()
+    return f"{out}\n{second}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pair", nargs=2, default=list(DEFAULT_PAIR))
@@ -128,8 +188,14 @@ def main() -> int:
     parser.add_argument("--out-dir", default="previews")
     parser.add_argument("--do", action="append", default=[],
                         help="a tab command before the picture; see act()")
+    parser.add_argument("--sync", choices=("update", "mirror"),
+                        help="two sample folders, and the sync preview for them")
     args = parser.parse_args()
     width, height = (int(v) for v in args.size.lower().split("x"))
+    if args.sync:
+        print(render_sync(args.out, args.sync, theme=args.theme, accent=args.accent,
+                          density=args.density, width=width, height=height))
+        return 0
 
     if args.all_themes:
         from app.theme.tokens import THEMES

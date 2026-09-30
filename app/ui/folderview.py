@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core import folders as F
+from app.core import syncplan as S
 from app.core.folderdiff import FolderSession
 from app.ui.diffview import mono_font, parse_colour
 
@@ -341,6 +342,31 @@ class FolderView(QWidget):
         menu.addSeparator()
         menu.addAction("Stop", self.session.cancel_contents)
         self.contents.setMenu(menu)
+        # 1.0: sync, handed to File Manager's queue (`ui/syncdialog.py`).
+        self.sync = QToolButton()
+        self.sync.setText("Sync")
+        self.sync.setProperty("role", "retry")
+        self.sync.setPopupMode(QToolButton.MenuButtonPopup)
+        self.sync.setFocusPolicy(Qt.NoFocus)
+        self.sync.setToolTip("Make one side match the other: previewed here, then run "
+                             "by File Manager's queue")
+        self.sync.clicked.connect(lambda _c=False: self.open_sync(S.TO_RIGHT, S.UPDATE))
+        sync_menu = QMenu(self)
+        sync_menu.addAction("Update left to right",
+                            lambda: self.open_sync(S.TO_RIGHT, S.UPDATE))
+        sync_menu.addAction("Update right to left",
+                            lambda: self.open_sync(S.TO_LEFT, S.UPDATE))
+        sync_menu.addSeparator()
+        sync_menu.addAction("Mirror left to right",
+                            lambda: self.open_sync(S.TO_RIGHT, S.MIRROR))
+        sync_menu.addAction("Mirror right to left",
+                            lambda: self.open_sync(S.TO_LEFT, S.MIRROR))
+        sync_menu.addSeparator()
+        self._stop_waiting = sync_menu.addAction("Stop waiting for File Manager",
+                                                 self.session.forget_sync)
+        sync_menu.aboutToShow.connect(
+            lambda: self._stop_waiting.setEnabled(self.session.syncing))
+        self.sync.setMenu(sync_menu)
         self.expand = QToolButton()
         self.expand.setText("Expand")
         self.expand.setProperty("role", "retry")
@@ -360,6 +386,7 @@ class FolderView(QWidget):
         bar.addWidget(segments)
         bar.addWidget(self.mask, 1)
         bar.addWidget(self.contents)
+        bar.addWidget(self.sync)
         bar.addWidget(self.expand)
         bar.addWidget(self.collapse)
         top = QWidget()
@@ -375,6 +402,9 @@ class FolderView(QWidget):
 
         session.changed.connect(self.refresh)
         session.progressed.connect(self._progress)
+        session.handed.connect(self._handed)
+        session.remote.connect(self._remote)
+        self._dialog = None
         self.apply_tokens(tokens)
         self.set_show(F.SHOW_ALL, rebuild=False)
         self.refresh()
@@ -402,6 +432,10 @@ class FolderView(QWidget):
         text = self.session.status()
         self.line.setText(text)
         self.contents.setEnabled(self.session.tree is not None)
+        self.sync.setEnabled(self.session.tree is not None or self.session.syncing)
+        if self.session.syncing:
+            text += "  ·  waiting for File Manager's queue"
+            self.line.setText(text)
         self.status.emit(text)
 
     def _expand_differences(self) -> None:
@@ -441,6 +475,48 @@ class FolderView(QWidget):
             if node.right is None:
                 right = ""
             self.openPair.emit(left, right)
+
+    # ----------------------------------------------------------- sync
+
+    def open_sync(self, direction: str, mode: str, nodes=None) -> None:
+        """The preview, and on its OK the handoff. Nothing is sent from here
+        that the preview did not show with its box ticked."""
+        session = self.session
+        if session.tree is None:
+            return
+        if session.syncing:
+            self.status.emit("A sync is already with File Manager; this comparison is "
+                             "read again when it finishes.")
+            return
+        from app.ui.syncdialog import SyncDialog
+
+        dialog = SyncDialog(session.tree, session.sides[0].path, session.sides[1].path,
+                            direction=direction, mode=mode, nodes=nodes,
+                            titles=(session.sides[0].title, session.sides[1].title),
+                            tokens=self.model.tokens, parent=self)
+        self._dialog = dialog
+        session.check_remote()
+        try:
+            accepted = dialog.exec()
+        finally:
+            self._dialog = None
+        if accepted and dialog.request:
+            session.send_sync(dialog.request)
+
+    def _picked(self, direction: str, mode: str) -> None:
+        nodes = self.selected()
+        if nodes:
+            self.open_sync(direction, mode, nodes)
+
+    def _remote(self, sides) -> None:
+        if self._dialog is not None:
+            self._dialog.set_remote(tuple(sides))
+
+    def _handed(self, text: str) -> None:
+        self.line.setText(text)
+        self.status.emit(text)
+        # The line keeps the handoff's words; only the button follows the state.
+        self.sync.setEnabled(self.session.tree is not None or self.session.syncing)
 
     def _contents(self, all_pairs: bool = False) -> None:
         count = self.session.compare_contents(all_pairs=all_pairs)
@@ -515,6 +591,14 @@ class FolderView(QWidget):
         if files:
             menu.addAction("Compare in a new tab\tEnter", self._open)
         menu.addAction("Compare contents", self._contents_selected)
+        menu.addSeparator()
+        ready = not self.session.syncing
+        for label, direction, mode in (("Copy to the right...", S.TO_RIGHT, S.COPY),
+                                       ("Copy to the left...", S.TO_LEFT, S.COPY),
+                                       ("Remove from the left...", S.TO_LEFT, S.REMOVE),
+                                       ("Remove from the right...", S.TO_RIGHT, S.REMOVE)):
+            action = menu.addAction(label, lambda d=direction, m=mode: self._picked(d, m))
+            action.setEnabled(ready)
         menu.addSeparator()
         node = nodes[0]
         left, right = self.session.paths(node)

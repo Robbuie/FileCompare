@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.0.0 - folder sync, run by File Manager
+
+- **Sync** on the folder view's toolbar: update left to right or right to
+  left (copy what is only on one side and what is newer there), or mirror
+  (the same, and remove what is only on the target). The first press is
+  update left to right; the arrow beside it has the other three.
+- **Picked rows** from the right-click menu: copy to the right or to the
+  left, which replaces what is there whatever its time, or remove from
+  either side. A folder picked means the files under it that differ.
+- **Everything is previewed first**: every copy and removal with a box
+  beside it, ticked, and everything left alone with the reason -- newer on
+  the target, the same time with different contents, a folder on one side
+  and a file on the other, a link or junction, something that could not be
+  read. A folder on one side only is one line, copied or removed whole. The
+  direction and the mode switch in the preview without reading anything
+  again.
+- **File Manager does the copying.** "Send to File Manager" hands the ticked
+  actions to its queue (File Manager 0.46 or later), so there is one copy
+  engine: pause, cancel, the conflict rule, retry and history are its own.
+  An update copies under "newer only", so a file that changed on the target
+  after the compare is still not overwritten by an older one. Removals go to
+  the Recycle Bin, and the preview says when the target is on a share,
+  where Windows removes permanently instead.
+- When File Manager's jobs finish, both folders are read again by
+  themselves and the status line says how many were copied, skipped or
+  failed. "Stop waiting for File Manager" on the Sync menu stops listening
+  for that (the jobs carry on there).
+- **Mirror needs a complete picture**: if anything could not be read, only
+  update is offered, and the preview says why.
+- Junctions and symbolic links are marked in the tree's data and are never
+  copied, removed or walked through.
+
 ## 0.9.0 - reports, recent pairs, comments
 
 - **Reports**: Ctrl+Shift+H saves a text comparison as a self-contained HTML

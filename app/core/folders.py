@@ -66,6 +66,9 @@ class Entry:
     size: int = 0
     mtime: float = 0.0
     error: str = ""     # a folder that could not be listed
+    #: 1.0: a junction or symbolic link. Listed, never walked -- and never
+    #: copied or removed by a sync, which would act on what it points at.
+    is_link: bool = False
 
 
 @dataclass
