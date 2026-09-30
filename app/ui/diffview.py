@@ -1,0 +1,636 @@
+"""The side-by-side text view: two painted panes, a gutter, an overview map.
+
+Painted rather than built from two `QPlainTextEdit`s, for the reason CLAUDE.md
+gives: two independent documents cannot be kept aligned with filler rows, and
+neither survives a 200 MB log. Here both panes draw the same row list from
+`core/diff/align.py`, starting at the same row, so they cannot drift -- the
+synchronised scroll is not a feature that was added, it is the absence of a
+second scroll position.
+
+Only the rows on screen are painted, and the intraline marks are worked out
+for those rows only, on first paint, and cached until the comparison changes.
+
+Everything is in one module because the four widgets share one state object
+(`ViewState`) and have no life apart from each other. None of them touches a
+file.
+
+The text is assumed to be monospaced for placing marks and for horizontal
+scrolling -- the width of "0" times the column. That is true of Cascadia Mono
+and Consolas for everything a source file or a log usually holds; a line of
+wide East Asian characters will have its marks drift. Measuring every prefix
+instead would be correct and would cost a font measurement per mark per paint.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
+from PySide6.QtWidgets import QHBoxLayout, QScrollBar, QSizePolicy, QVBoxLayout, QWidget
+
+from app.core.diff import align, intraline
+
+TAB = 4
+
+#: Rows the wheel moves per notch.
+WHEEL_ROWS = 3
+
+#: Where a difference lands when stepped to, as a share of the view's height
+#: from the top. A third leaves room to see what comes before it.
+LANDING = 0.3
+
+
+@dataclass
+class ViewState:
+    rows: list = field(default_factory=list)
+    lines: tuple[list[str], list[str]] = ((), ())  # type: ignore[assignment]
+    blocks: list = field(default_factory=list)
+    first: int = 0
+    x: int = 0
+    current: int | None = None          # index into blocks
+    mode: str = "char"
+    marks: dict = field(default_factory=dict)  # row -> (left spans, right spans)
+
+    def display(self, side: int, index: int) -> str:
+        if index == align.NONE:
+            return ""
+        return self.lines[side][index].expandtabs(TAB)
+
+    def spans(self, row: int) -> tuple[list, list]:
+        hit = self.marks.get(row)
+        if hit is not None:
+            return hit
+        left, right, kind = self.rows[row]
+        if kind in (align.CHANGED, align.IGNORED) and left != align.NONE and right != align.NONE:
+            hit = intraline.spans(self.display(0, left), self.display(1, right), self.mode)
+        else:
+            hit = ([], [])
+        self.marks[row] = hit
+        return hit
+
+
+def parse_colour(value: str | None) -> QColor:
+    """A token as a `QColor`. The derived tints are written `rgba(r, g, b, a)`
+    for the stylesheet, which `QColor` does not read -- given one it comes back
+    invalid and paints black, which is how the current-difference outline
+    first rendered on the light theme."""
+    if not value:
+        return QColor()
+    text = value.strip()
+    if text.startswith("rgba(") and text.endswith(")"):
+        try:
+            r, g, b, a = (part.strip() for part in text[5:-1].split(","))
+            colour = QColor(int(r), int(g), int(b))
+            colour.setAlphaF(float(a))
+            return colour
+        except ValueError:
+            return QColor()
+    return QColor(text)
+
+
+def mono_font(tokens: dict[str, str]) -> QFont:
+    font = QFont()
+    font.setFamilies(["Cascadia Mono", "Consolas", "DejaVu Sans Mono", "monospace"])
+    font.setStyleHint(QFont.Monospace)
+    size = float(str(tokens.get("ui_font", "13px")).rstrip("px") or 13)
+    font.setPixelSize(max(9, round(size)))
+    return font
+
+
+class _Painted(QWidget):
+    """Shared plumbing: the state, the tokens, the metrics."""
+
+    wheeled = Signal(int)
+    clicked = Signal(int)
+
+    def __init__(self, state: ViewState, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.state = state
+        self.tokens: dict[str, str] = {}
+        self.row_h = 20
+        self.char_w = 8.0
+        self.ascent = 14.0
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+
+    def apply_tokens(self, tokens: dict[str, str], font: QFont) -> None:
+        self.tokens = tokens
+        self.setFont(font)
+        metrics = QFontMetricsF(font)
+        self.row_h = int(metrics.height() + 5)
+        self.char_w = metrics.horizontalAdvance("0")
+        self.ascent = metrics.ascent()
+        self.update()
+
+    def colour(self, name: str) -> QColor:
+        return parse_colour(self.tokens.get(name))
+
+    def visible_rows(self) -> int:
+        return max(1, self.height() // max(1, self.row_h))
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        steps = event.angleDelta().y() / 120.0
+        if steps:
+            self.wheeled.emit(int(-steps * WHEEL_ROWS) or (-1 if steps > 0 else 1))
+        event.accept()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.state.first + int(event.position().y() // self.row_h))
+        super().mousePressEvent(event)
+
+
+class TextPane(_Painted):
+    """One side's rows: line numbers, washes, marks, text."""
+
+    def __init__(self, state: ViewState, side: int, parent: QWidget | None = None) -> None:
+        super().__init__(state, parent)
+        self.side = side
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumWidth(120)
+
+    def number_width(self) -> float:
+        count = max(1, len(self.state.lines[self.side]))
+        return self.char_w * (len(str(count)) + 2)
+
+    def text_columns(self) -> int:
+        return max(1, int((self.width() - self.number_width() - 8) // max(1.0, self.char_w)))
+
+    def longest(self) -> int:
+        """Widest line on this side, in columns. Cached per comparison."""
+        cached = getattr(self, "_longest", None)
+        key = id(self.state.lines[self.side])
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        widest = max((len(line.expandtabs(TAB)) for line in self.state.lines[self.side]),
+                     default=0)
+        self._longest = (key, widest)
+        return widest
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        s = self.state
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), self.colour("bg_2"))
+        numbers = self.number_width()
+        text_x = numbers + 8
+        painter.fillRect(QRectF(0, 0, numbers, self.height()), self.colour("bg_1"))
+
+        side = self.side
+        own_only = align.DELETED if side == 0 else align.INSERTED
+        washes = {
+            align.CHANGED: self.colour("diff_chg_row"),
+            align.DELETED: self.colour("diff_del_row"),
+            align.INSERTED: self.colour("diff_add_row"),
+            align.IGNORED: self.colour("diff_ignored_row"),
+        }
+        mark_colours = {
+            align.CHANGED: self.colour("diff_chg_mark"),
+            align.IGNORED: self.colour("diff_ignored_mark"),
+        }
+        filler = self.colour("diff_filler")
+        ink = self.colour("txt_0")
+        muted = self.colour("txt_2")
+        dim = self.colour("txt_1")
+        first_col = int(s.x // max(1.0, self.char_w))
+        cols = self.text_columns() + 2
+        offset = s.x - first_col * self.char_w
+
+        painter.setFont(self.font())
+        end = min(len(s.rows), s.first + self.visible_rows() + 1)
+        for row in range(s.first, end):
+            y = (row - s.first) * self.row_h
+            index = s.rows[row][side]
+            kind = s.rows[row][2]
+            band = QRectF(0, y, self.width(), self.row_h)
+            text_band = QRectF(numbers, y, self.width() - numbers, self.row_h)
+            if index == align.NONE:
+                painter.fillRect(band, filler)
+                continue
+            if kind != align.EQUAL:
+                wash = washes.get(kind)
+                if kind in (align.DELETED, align.INSERTED) and kind != own_only:
+                    wash = None
+                if wash is not None:
+                    painter.fillRect(text_band, wash)
+                    # The line number column carries the colour too, so a
+                    # change is visible with the text scrolled away from it.
+                    painter.fillRect(QRectF(0, y, 3, self.row_h), self.colour(
+                        _bar_name(kind)))
+            if kind in mark_colours:
+                spans = s.spans(row)[side]
+                if spans:
+                    colour = mark_colours[kind]
+                    for start, stop in spans:
+                        if stop <= first_col or start >= first_col + cols:
+                            continue
+                        x0 = text_x + (max(start, first_col) - first_col) * self.char_w - offset
+                        x1 = text_x + (min(stop, first_col + cols) - first_col) * self.char_w - offset
+                        painter.fillRect(QRectF(x0, y + 1, max(2.0, x1 - x0), self.row_h - 2),
+                                         colour)
+            painter.setPen(dim if kind != align.EQUAL else muted)
+            painter.drawText(QRectF(0, y, numbers - self.char_w, self.row_h),
+                             Qt.AlignRight | Qt.AlignVCenter, str(index + 1))
+            text = s.display(side, index)[first_col:first_col + cols]
+            if text:
+                painter.setPen(ink)
+                painter.setClipRect(text_band)
+                painter.drawText(QRectF(text_x - offset, y, self.width(), self.row_h),
+                                 Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip, text)
+                painter.setClipping(False)
+
+        if s.rows and end <= s.first + self.visible_rows():
+            # Past the last row: the pane's own surface, nothing else.
+            pass
+        self._paint_current(painter)
+        painter.setPen(QPen(self.colour("line_soft"), 1))
+        painter.drawLine(int(numbers), 0, int(numbers), self.height())
+        painter.end()
+
+    def _paint_current(self, painter: QPainter) -> None:
+        s = self.state
+        if s.current is None or s.current >= len(s.blocks):
+            return
+        block = s.blocks[s.current]
+        top = (block.start - s.first) * self.row_h
+        bottom = (block.end - s.first) * self.row_h
+        if bottom < 0 or top > self.height():
+            return
+        pen = QPen(self.colour("accent_line"), 1)
+        painter.setPen(pen)
+        painter.drawLine(0, top, self.width(), top)
+        painter.drawLine(0, bottom - 1, self.width(), bottom - 1)
+
+
+def _bar_name(kind: int) -> str:
+    return {align.CHANGED: "diff_chg_bar", align.DELETED: "diff_del_bar",
+            align.INSERTED: "diff_add_bar", align.IGNORED: "diff_ignored_bar"}[kind]
+
+
+class Gutter(_Painted):
+    """Between the panes: which rows differ, and the current difference.
+
+    Later versions put the copy-left and copy-right arrows here; it is the
+    width it is so that they fit without the panes moving.
+    """
+
+    WIDTH = 30
+
+    def __init__(self, state: ViewState, parent: QWidget | None = None) -> None:
+        super().__init__(state, parent)
+        self.setFixedWidth(self.WIDTH)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        s = self.state
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), self.colour("bg_1"))
+        end = min(len(s.rows), s.first + self.visible_rows() + 1)
+        mid = self.width() / 2
+        for block_index, block in enumerate(s.blocks):
+            if block.end <= s.first or block.start >= end:
+                continue
+            top = (max(block.start, s.first) - s.first) * self.row_h
+            bottom = (min(block.end, end) - s.first) * self.row_h
+            colour = self.colour(_bar_name(block.kind))
+            current = block_index == s.current
+            width = 6 if current else 4
+            painter.fillRect(QRectF(mid - width / 2, top + 1, width, max(2, bottom - top - 2)),
+                             colour)
+            if current:
+                painter.setPen(QPen(self.colour("accent"), 1.5))
+                painter.drawLine(2, int(top), 2, int(bottom))
+                painter.drawLine(self.width() - 3, int(top), self.width() - 3, int(bottom))
+        painter.setPen(QPen(self.colour("line_soft"), 1))
+        painter.drawLine(0, 0, 0, self.height())
+        painter.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
+        painter.end()
+
+
+class DiffMap(QWidget):
+    """The whole comparison in one strip: every difference, and the view.
+
+    Two columns, left side and right side, so a block only on one side is
+    visibly on that side. Click or drag to move the view there; the wheel
+    scrolls. It replaces the vertical scrollbar rather than sitting beside
+    one: two controls that both mean "where am I" is one too many.
+    """
+
+    WIDTH = 18
+    moved = Signal(float)       # the fraction of the rows to centre on
+    wheeled = Signal(int)
+
+    def __init__(self, state: ViewState, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.state = state
+        self.tokens: dict[str, str] = {}
+        self.visible = 1
+        self.setFixedWidth(self.WIDTH)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Every difference in the file. Click or drag to go there.")
+
+    def apply_tokens(self, tokens: dict[str, str]) -> None:
+        self.tokens = tokens
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        s = self.state
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), parse_colour(self.tokens.get("bg_1")))
+        total = max(1, len(s.rows))
+        height = self.height() - 4
+        column = (self.width() - 6) / 2
+        for block in s.blocks:
+            y0 = 2 + block.start / total * height
+            y1 = 2 + block.end / total * height
+            box_h = max(2.0, y1 - y0)
+            colour = parse_colour(self.tokens.get(_bar_name(block.kind)))
+            left, right = self._sides(block)
+            if left:
+                painter.fillRect(QRectF(2, y0, column, box_h), colour)
+            if right:
+                painter.fillRect(QRectF(4 + column, y0, column, box_h), colour)
+        # The view.
+        if s.rows:
+            v0 = 2 + s.first / total * height
+            v1 = 2 + min(total, s.first + self.visible) / total * height
+            frame = parse_colour(self.tokens.get("txt_1"))
+            fill = QColor(frame)
+            fill.setAlphaF(0.12)
+            painter.fillRect(QRectF(1, v0, self.width() - 2, max(4.0, v1 - v0)), fill)
+            pen = QPen(frame, 1)
+            painter.setPen(pen)
+            painter.drawRect(QRectF(1, v0, self.width() - 3, max(4.0, v1 - v0)))
+        painter.end()
+
+    def _sides(self, block) -> tuple[bool, bool]:
+        if block.kind == align.DELETED:
+            return True, False
+        if block.kind == align.INSERTED:
+            return False, True
+        return True, True
+
+    def _jump(self, y: float) -> None:
+        height = max(1, self.height() - 4)
+        self.moved.emit(max(0.0, min(1.0, (y - 2) / height)))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self._jump(event.position().y())
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if event.buttons() & Qt.LeftButton:
+            self._jump(event.position().y())
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        steps = event.angleDelta().y() / 120.0
+        if steps:
+            self.wheeled.emit(int(-steps * WHEEL_ROWS) or (-1 if steps > 0 else 1))
+        event.accept()
+
+
+class DiffView(QWidget):
+    """The four painted widgets and the keys that move them.
+
+    `command` carries the keys that belong to the tab rather than the view --
+    swap, compare again, the rules switch -- so that they work whichever child
+    has the keyboard.
+    """
+
+    currentChanged = Signal()
+    command = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.state = ViewState()
+        self.left = TextPane(self.state, 0)
+        self.right = TextPane(self.state, 1)
+        self.gutter = Gutter(self.state)
+        self.map = DiffMap(self.state)
+        self.hbar = QScrollBar(Qt.Horizontal)
+        self.hbar.setFocusPolicy(Qt.NoFocus)
+        self.hbar.valueChanged.connect(self._set_x)
+        self.focused_side = 0
+
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addWidget(self.left, 1)
+        body.addWidget(self.gutter)
+        body.addWidget(self.right, 1)
+        body.addWidget(self.map)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addLayout(body, 1)
+        outer.addWidget(self.hbar)
+
+        for pane in (self.left, self.right, self.gutter):
+            pane.wheeled.connect(self.scroll_by)
+            pane.clicked.connect(self._clicked)
+        self.left.clicked.connect(lambda _r: self._focus_side(0))
+        self.right.clicked.connect(lambda _r: self._focus_side(1))
+        self.map.moved.connect(self._centre_on)
+        self.map.wheeled.connect(self.scroll_by)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    # -------------------------------------------------------------- content
+
+    def apply_tokens(self, tokens: dict[str, str]) -> None:
+        font = mono_font(tokens)
+        for widget in (self.left, self.right, self.gutter):
+            widget.apply_tokens(tokens, font)
+        self.map.apply_tokens(tokens)
+        self._layout_changed()
+
+    def set_comparison(self, comparison: align.Comparison, left: list[str],
+                       right: list[str], mode: str) -> None:
+        keep = self.state.first if self.state.rows else 0
+        self.state.rows = comparison.rows
+        self.state.blocks = comparison.blocks
+        self.state.lines = (left, right)
+        self.state.mode = mode
+        self.state.marks = {}
+        self.state.current = None
+        self.state.first = 0
+        self._layout_changed()
+        self.scroll_to(min(keep, self._max_first()))
+        if keep == 0 and comparison.differences:
+            self.go(self._index_of_nth_difference(0))
+        else:
+            self._sync_current()
+        self.update_all()
+
+    def set_mode(self, mode: str) -> None:
+        self.state.mode = mode
+        self.state.marks = {}
+        self.update_all()
+
+    # --------------------------------------------------------------- moving
+
+    def _max_first(self) -> int:
+        return max(0, len(self.state.rows) - self.left.visible_rows() + 1)
+
+    def scroll_to(self, first: int) -> None:
+        first = max(0, min(first, self._max_first()))
+        if first != self.state.first:
+            self.state.first = first
+            self.update_all()
+
+    def scroll_by(self, rows: int) -> None:
+        self.scroll_to(self.state.first + rows)
+
+    def _centre_on(self, fraction: float) -> None:
+        row = int(fraction * len(self.state.rows))
+        self.scroll_to(row - self.left.visible_rows() // 2)
+
+    def _set_x(self, value: int) -> None:
+        self.state.x = int(value * self.left.char_w)
+        self.update_all()
+
+    def go(self, block_index: int | None) -> None:
+        """Make `block_index` current and bring it into view."""
+        if block_index is None or not self.state.blocks:
+            return
+        self.state.current = block_index
+        block = self.state.blocks[block_index]
+        visible = self.left.visible_rows()
+        if block.start < self.state.first or block.end > self.state.first + visible:
+            self.scroll_to(block.start - int(visible * LANDING))
+        self.update_all()
+        self.currentChanged.emit()
+
+    def _index_of_nth_difference(self, n: int) -> int | None:
+        found = [i for i, b in enumerate(self.state.blocks) if b.significant]
+        if not found:
+            return None
+        return found[n] if n >= 0 else found[n]
+
+    def next_difference(self) -> None:
+        anchor = self._anchor_row()
+        for index, block in enumerate(self.state.blocks):
+            if block.significant and block.start > anchor:
+                self.go(index)
+                return
+
+    def previous_difference(self) -> None:
+        anchor = self._anchor_row(previous=True)
+        for index in range(len(self.state.blocks) - 1, -1, -1):
+            block = self.state.blocks[index]
+            if block.significant and block.start < anchor:
+                self.go(index)
+                return
+
+    def first_difference(self) -> None:
+        self.go(self._index_of_nth_difference(0))
+
+    def last_difference(self) -> None:
+        self.go(self._index_of_nth_difference(-1))
+
+    def _anchor_row(self, previous: bool = False) -> int:
+        """Where next/previous count from: the current difference if it is on
+        screen, otherwise the top of the view -- so stepping after scrolling
+        away continues from what is being looked at, not from where it was."""
+        s = self.state
+        if s.current is not None:
+            block = s.blocks[s.current]
+            if s.first <= block.start < s.first + self.left.visible_rows():
+                return block.start
+        return s.first if previous else s.first - 1
+
+    def _clicked(self, row: int) -> None:
+        index = None
+        for i, block in enumerate(self.state.blocks):
+            if block.start <= row < block.end:
+                index = i
+                break
+        if index is not None and index != self.state.current:
+            self.state.current = index
+            self.update_all()
+            self.currentChanged.emit()
+        self.setFocus(Qt.MouseFocusReason)
+
+    def _focus_side(self, side: int) -> None:
+        if side != self.focused_side:
+            self.focused_side = side
+            self.currentChanged.emit()
+
+    def _sync_current(self) -> None:
+        if self.state.current is not None and self.state.current >= len(self.state.blocks):
+            self.state.current = None
+        self.currentChanged.emit()
+
+    def position(self) -> tuple[int, int]:
+        """(current difference number, how many), 1-based; 0 when none."""
+        significant = [i for i, b in enumerate(self.state.blocks) if b.significant]
+        if self.state.current in significant:
+            return significant.index(self.state.current) + 1, len(significant)
+        return 0, len(significant)
+
+    # --------------------------------------------------------------- layout
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._layout_changed()
+
+    def _layout_changed(self) -> None:
+        widest = max(self.left.longest(), self.right.longest()) if self.state.rows else 0
+        columns = min(self.left.text_columns(), self.right.text_columns())
+        self.hbar.setRange(0, max(0, widest - columns + 2))
+        self.hbar.setPageStep(columns)
+        self.hbar.setVisible(widest > columns)
+        self.map.visible = self.left.visible_rows()
+        self.scroll_to(self.state.first)
+        self.update_all()
+
+    def update_all(self) -> None:
+        for widget in (self.left, self.right, self.gutter, self.map):
+            widget.update()
+
+    # ----------------------------------------------------------------- keys
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        key = event.key()
+        mods = event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier)
+        page = max(1, self.left.visible_rows() - 1)
+        if mods == Qt.AltModifier and key == Qt.Key_Down:
+            self.next_difference()
+        elif mods == Qt.AltModifier and key == Qt.Key_Up:
+            self.previous_difference()
+        elif mods == Qt.NoModifier and key == Qt.Key_Home:
+            self.first_difference()
+        elif mods == Qt.NoModifier and key == Qt.Key_End:
+            self.last_difference()
+        elif mods == Qt.ControlModifier and key == Qt.Key_Home:
+            self.scroll_to(0)
+        elif mods == Qt.ControlModifier and key == Qt.Key_End:
+            self.scroll_to(self._max_first())
+        elif mods == Qt.NoModifier and key == Qt.Key_Down:
+            self.scroll_by(1)
+        elif mods == Qt.NoModifier and key == Qt.Key_Up:
+            self.scroll_by(-1)
+        elif key == Qt.Key_PageDown:
+            self.scroll_by(page)
+        elif key == Qt.Key_PageUp:
+            self.scroll_by(-page)
+        elif mods == Qt.NoModifier and key == Qt.Key_Right:
+            self.hbar.setValue(self.hbar.value() + 4)
+        elif mods == Qt.NoModifier and key == Qt.Key_Left:
+            self.hbar.setValue(self.hbar.value() - 4)
+        elif mods == Qt.NoModifier and key == Qt.Key_Tab:
+            self._focus_side(1 - self.focused_side)
+        elif mods == Qt.ControlModifier and key == Qt.Key_U:
+            self.command.emit("swap")
+        elif mods == Qt.ControlModifier and key == Qt.Key_R:
+            self.command.emit("reload")
+        elif mods == Qt.ControlModifier and key == Qt.Key_I:
+            self.command.emit("rules")
+        else:
+            super().keyPressEvent(event)
+            return
+        event.accept()
+
+    def focusNextPrevChild(self, forward: bool) -> bool:  # noqa: N802
+        # Tab is "the other side" here, as it is "the other pane" in File
+        # Manager; without this Qt takes it to move focus out of the view.
+        return False

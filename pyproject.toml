@@ -1,0 +1,18 @@
+[project]
+name = "filecompare"
+version = "0.1.0"
+description = "Windows side-by-side compare and merge"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.7",
+]
+
+[project.urls]
+Repository = "https://github.com/Robbuie/FileCompare"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The repository root, so `app` imports under a bare `pytest` as well as under
+# `python -m pytest`. File Manager's pyproject says why at length; the release
+# workflow runs the bare form, so the two have to agree.
+pythonpath = ["."]

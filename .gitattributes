@@ -1,0 +1,3 @@
+# The fixture pairs are compared byte for byte, and two of them exist only to
+# differ in their line endings. Git must never convert them on checkout.
+tests/data/** -text
