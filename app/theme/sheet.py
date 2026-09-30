@@ -360,6 +360,15 @@ QLabel[role="starttitle"] {{ font-size: 20px; font-weight: 600; }}
 QLabel[role="sidelabel"] {{ color: {txt_2}; font-size: {head_font}; font-weight: 600; letter-spacing: 1px; }}
 QLineEdit[role="pathfield"] {{ font-family: {mono}; padding: 4px 10px; }}
 QLabel[role="hint"] {{ color: {txt_2}; }}
+QPushButton[role="recent"] {{
+    background: transparent;
+    border: 1px solid transparent;
+    color: {txt_1};
+    text-align: left;
+    padding: 3px 8px;
+    font-family: {mono};
+}}
+QPushButton[role="recent"]:hover {{ background: {bg_3}; color: {txt_0}; }}
 """
 
 

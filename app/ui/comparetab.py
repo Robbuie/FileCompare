@@ -548,6 +548,13 @@ class CompareTab(QWidget):
         blank.setCheckable(True)
         blank.setChecked(rules.blank_lines)
         blank.triggered.connect(lambda c: self._change_rules(blank_lines=c))
+        comments = menu.addAction("Ignore comments" + (
+            f"  ({' '.join(m.strip() for m in rules.markers)})" if rules.markers
+            else "  (not known for this file type)"))
+        comments.setCheckable(True)
+        comments.setChecked(rules.comments)
+        comments.setEnabled(bool(rules.markers))
+        comments.triggered.connect(lambda c: self._change_rules(comments=c))
         if rules.patterns:
             menu.addSeparator()
             for pattern in rules.patterns:
@@ -609,6 +616,8 @@ class CompareTab(QWidget):
             QApplication.clipboard().setText(text)
             count = len(self.view.selected_lines()[1])
             self.status.emit(f"Copied {count} line{'s' if count != 1 else ''}")
+        elif name == "report":
+            self.save_report()
         elif name == "select-all":
             if self.view.state.rows:
                 self.view.select_rows(side, 0, len(self.view.state.rows))
@@ -621,6 +630,34 @@ class CompareTab(QWidget):
                 first, stop = align.side_range(s.result.rows, lo, hi, side)
                 if stop > first:
                     s.replace_lines(side, first, stop, [])
+
+    def save_report(self) -> None:
+        """Ctrl+Shift+H: the comparison as an HTML report or a unified patch."""
+        from app.core import report
+        from app.io import save as io_save
+
+        s = self.session
+        if s.result is None or s.kind != core.TEXT:
+            self.status.emit("A report needs a text comparison")
+            return
+        names = tuple(ntpath.basename(display(side.path)) or "untitled" for side in s.sides)
+        start = ntpath.join(ntpath.dirname(display(s.sides[0].path)),
+                            f"{ntpath.splitext(names[0])[0]} vs {ntpath.splitext(names[1])[0]}.html")
+        path, chosen = QFileDialog.getSaveFileName(
+            self, "Save the comparison", start,
+            "HTML report (*.html);;Unified patch (*.patch *.diff)")
+        if not path:
+            return
+        path = QDir.toNativeSeparators(path)
+        left, right = s.result_lines
+        if path.lower().endswith((".patch", ".diff")) or "patch" in chosen.lower():
+            text = report.unified(s.result, left, right, names)
+        else:
+            text = report.html_report(s.result, left, right, names=names,
+                                      rules=s.rules.describe(),
+                                      note=s.format_note if s.structure else "")
+        s._loader.submit(io_save.save, path, text.encode("utf-8"))
+        self.status.emit(f"Saving {ntpath.basename(path)}")
 
     def _can_edit(self, index: int) -> bool:
         side = self.session.sides[index]

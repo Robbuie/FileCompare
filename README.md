@@ -13,18 +13,32 @@ is where compares that matter at work get built properly -- Logix exports
 without the export-date noise, CSV schedules matched on a key column rather
 than by row.
 
-## Status
+## What it does
 
-0.1: text compare. Two files side by side, aligned, with the lines that
-differ washed in colour and the characters that differ marked inside them; an
-overview of every difference down the right edge; next and previous; rules for
-whitespace, case, blank lines and unimportant text. It reads UTF-8, UTF-16
-and UTF-32 with or without a byte order mark, and Windows-1252, and says which
-it found. It opens from the command line the way Beyond Compare does, and a
-second launch opens a tab in the window already open.
+- **Text**: two files side by side, aligned the way a person expects
+  (patience and histogram, not Myers), changed lines washed and the changed
+  characters or words marked. Edit either side in place, copy differences
+  across, undo, and save in exactly the encoding, byte order mark and line
+  endings the file was read with. Find in both sides. Rules for whitespace,
+  case, blank lines, comments and "unimportant" patterns, which grey a
+  difference out rather than hide it.
+- **Folders**: both trees merged into one, with File Manager's verdicts
+  (names without case, times within two seconds), filters, name masks, and a
+  content compare for the pairs size and time cannot settle.
+- **Logix exports (.L5X)** by structure: export dates ignored, tags and
+  programs sorted, rung numbers kept out of the way, and every difference
+  named by program, routine and rung. XML, JSON and INI by structure too.
+- **CSV tables** matched on a key column, compared cell by cell.
+- **Hex** for binary files, aligned by offset. **Images** side by side,
+  overlay, swipe, blink and difference, with a tolerance.
+- **Three-way merge** with git's `mergetool` exit codes.
+- PDF revisions and drawings are handed to Redline PDF and DWG Viewer.
+- HTML reports and unified patches of a text comparison (Ctrl+Shift+H).
 
-Not yet: editing and saving, folder compare, hex, images, three-way merge, the
-installer. See `CLAUDE.md` for the order they arrive in.
+It never freezes on a dead share: every file and folder is read off the
+window's thread, with a deadline and a Retry.
+
+F1 in the window lists the keys.
 
 ## Running
 

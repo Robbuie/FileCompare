@@ -223,3 +223,17 @@ def test_marks_stay_inside_the_lines(mode):
             assert 0 <= start < end <= len(x)
         for start, end in sb:
             assert 0 <= start < end <= len(y)
+
+
+def test_comments_are_looked_past_when_asked():
+    from app.core.rules import Rules, comment_markers
+
+    left = ["x = 1  # old note", "# a whole comment", "y = 2"]
+    right = ["x = 1  # new note", "y = 2"]
+    plain = align.compare(left, right)
+    assert len(plain.differences) == 1
+    rules = Rules(comments=True, markers=comment_markers("a.py"))
+    looked = align.compare(left, right, rules)
+    assert looked.identical and not looked.exact
+    assert comment_markers("prog.vb") == ("'", "REM ")
+    assert comment_markers("notes.txt") == ()

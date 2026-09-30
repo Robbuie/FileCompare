@@ -60,6 +60,7 @@ Ctrl+S / Ctrl+Shift+S     save this side, save both
 Ctrl+C                    copy the selected lines
 Ctrl+A                    select every line
 Ctrl+F                    find; F3 / Shift+F3 next, previous
+Ctrl+Shift+H              save an HTML report or a patch
 Ctrl+U                    swap sides
 Ctrl+R                    compare again from disk
 Ctrl+I                    rules off and on
@@ -76,6 +77,7 @@ def rules_from(config: Config) -> Rules:
         whitespace=whitespace if whitespace in WHITESPACE else "none",
         case=bool(config.get("compare.case")),
         blank_lines=bool(config.get("compare.blank_lines")),
+        comments=bool(config.get("compare.comments")),
         patterns=tuple(p for p in patterns if isinstance(p, str)) if isinstance(patterns, list) else (),
     )
 
@@ -231,8 +233,10 @@ class MainWindow(QMainWindow):
             self.new_tab()
 
     def new_tab(self, left: str = "", right: str = "") -> StartTab:
+        recent = [tuple(pair) for pair in self._config.get("recent")
+                  if isinstance(pair, list) and len(pair) == 2]
         page = StartTab((self._config.get("start.left_folder"),
-                         self._config.get("start.right_folder")))
+                         self._config.get("start.right_folder")), recent=recent)
         page.set_paths(left, right)
         page.compareRequested.connect(lambda l, r, p=page: self._start_to_compare(p, l, r))
         page.browsed.connect(lambda side, folder: self._config.set(
@@ -269,12 +273,20 @@ class MainWindow(QMainWindow):
         )
         session = Session(self._loader, left, right, options=options, titles=titles,
                           readonly=readonly)
+        self._remember(left, right)
         tab = CompareTab(session, self._tokens)
         tab.openPair.connect(lambda l, r: self.compare(l, r))
         tab.titleChanged.connect(lambda t=tab: self._retitle(t))
         tab.status.connect(lambda text, t=tab: self._tab_status(t, text))
         session.start()
         return tab
+
+    def _remember(self, left: str, right: str) -> None:
+        if not left or not right:
+            return
+        pairs = [p for p in self._config.get("recent")
+                 if isinstance(p, list) and p != [left, right]]
+        self._config.set("recent", ([[left, right]] + pairs)[:20])
 
     def _tab_status(self, tab: CompareTab, text: str) -> None:
         tab._last_status = text
@@ -523,7 +535,18 @@ class MainWindow(QMainWindow):
             self.compare(paths[0], paths[1])
         elif len(paths) == 1:
             event.acceptProposedAction()
-            self.new_tab(paths[0])
+            page = self.pages.currentWidget()
+            if isinstance(page, CompareTab):
+                # One file dropped on a comparison: it replaces the side it
+                # was dropped on, in a new tab, so the pair it came from is
+                # still there to go back to.
+                x = page.mapFrom(self, event.position().toPoint()).x()
+                side = 0 if x < page.width() / 2 else 1
+                paths_now = [s.path for s in page.session.sides]
+                paths_now[side] = paths[0]
+                self.compare(*paths_now)
+            else:
+                self.new_tab(paths[0])
 
     # ---------------------------------------------------------------- frame
 

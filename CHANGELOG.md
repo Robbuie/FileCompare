@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.0 - reports, recent pairs, comments
+
+- **Reports**: Ctrl+Shift+H saves a text comparison as a self-contained HTML
+  report -- both sides in two columns, only the differences and three lines
+  around each, the paths, the time and the rules in force -- or as a unified
+  patch.
+- **Recent pairs** on the start page, newest first; one click compares them
+  again.
+- **Drop a file on one side** of an open comparison to compare it against
+  the other side, in a new tab so the pair it replaced is still there.
+- **Ignore comments** in the Rules menu, for the file type's line comments:
+  `#` for Python, PowerShell and YAML, `;` for INI, `//` for C-like languages,
+  structured text and L5K, `'` for VB, `REM` for batch files, and others. A
+  comment-only line is looked past like a blank line; either is shown in grey.
+
 ## 0.8.0 - three-way merge, and git
 
 - **Three-way merge**: `FileCompare.exe --merge <mine> <theirs> <base> -o

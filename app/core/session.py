@@ -34,7 +34,7 @@ from app.core.diff import align
 from app.core import formats
 from app.core.document import ENDINGS, Document
 from app.core.loader import Envelope, Loader
-from app.core.rules import Rules
+from app.core.rules import Rules, comment_markers
 from app.io import kind as io_kind
 from app.io import load as io_load
 from app.io import save as io_save
@@ -174,6 +174,9 @@ class Session(QObject):
         super().__init__(parent)
         self._loader = loader
         self.options = options or Options()
+        markers = comment_markers(left) or comment_markers(right)
+        self.options = replace(self.options,
+                               rules=replace(self.options.rules, markers=markers))
         readonly = readonly or set()
         self.sides = [Side(path=left, title=titles[0], readonly="left" in readonly),
                       Side(path=right, title=titles[1], readonly="right" in readonly)]
@@ -256,6 +259,7 @@ class Session(QObject):
         self.start()
 
     def set_rules(self, rules: Rules) -> None:
+        rules = replace(rules, markers=self.options.rules.markers)
         if rules == self.options.rules:
             return
         self.options = replace(self.options, rules=rules)

@@ -25,7 +25,7 @@ from difflib import SequenceMatcher
 from typing import Sequence
 
 from app.core.diff import lines as line_diff
-from app.core.rules import Rules, is_blank, normaliser
+from app.core.rules import Rules, is_blank, normaliser, only_comment
 
 NONE = -1
 
@@ -137,9 +137,10 @@ def compare(left: Sequence[str], right: Sequence[str],
     left_keys = [table.setdefault(key(line), len(table)) for line in left]
     right_keys = [table.setdefault(key(line), len(table)) for line in right]
 
-    if rules.blank_lines:
-        left_kept = [i for i, line in enumerate(left) if not is_blank(line)]
-        right_kept = [j for j, line in enumerate(right) if not is_blank(line)]
+    skippable = _skippable(rules)
+    if skippable is not None:
+        left_kept = [i for i, line in enumerate(left) if not skippable(line)]
+        right_kept = [j for j, line in enumerate(right) if not skippable(line)]
     else:
         left_kept = list(range(len(left)))
         right_kept = list(range(len(right)))
@@ -170,8 +171,9 @@ def _gap(rows: list[Row], left: Sequence[str], right: Sequence[str],
     """Lay out the lines between two matched pairs."""
     if a0 >= a1 and b0 >= b1:
         return
-    if rules.blank_lines and all(is_blank(left[i]) for i in range(a0, a1)) \
-            and all(is_blank(right[j]) for j in range(b0, b1)):
+    skippable = _skippable(rules)
+    if skippable is not None and all(skippable(left[i]) for i in range(a0, a1)) \
+            and all(skippable(right[j]) for j in range(b0, b1)):
         # Only blank lines, which the rules say do not count. Paired off
         # where both sides have one, so a blank line added and another
         # removed do not show as two rows.
@@ -193,6 +195,20 @@ def _gap(rows: list[Row], left: Sequence[str], right: Sequence[str],
             rows.append((i, NONE, DELETED))
         else:
             rows.append((i, j, CHANGED))
+
+
+def _skippable(rules: Rules):
+    """The test for a line the rules say to look past entirely -- a blank
+    line, a comment-only line -- or None when there is no such rule."""
+    blank = rules.blank_lines
+    markers = rules.markers if rules.comments else ()
+    if not blank and not markers:
+        return None
+    if blank and markers:
+        return lambda line: is_blank(line) or only_comment(line, markers)
+    if blank:
+        return is_blank
+    return lambda line: only_comment(line, markers)
 
 
 def similarity(x: str, y: str) -> float:

@@ -36,9 +36,11 @@ class StartTab(QWidget):
     browsed = Signal(int, str)          # side, the folder browsed from
 
     def __init__(self, folders: tuple[str, str] = ("", ""),
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, *,
+                 recent: list[tuple[str, str]] | None = None) -> None:
         super().__init__(parent)
         self._folders = list(folders)
+        self._recent = list(recent or [])
         self.setAcceptDrops(True)
 
         card = QFrame()
@@ -87,6 +89,22 @@ class StartTab(QWidget):
         inner.addLayout(grid)
         inner.addSpacing(8)
         inner.addLayout(buttons)
+        if self._recent:
+            # The pairs compared lately, newest first: the second compare of
+            # the same two files is usually the next morning.
+            label = QLabel("RECENT")
+            label.setProperty("role", "sidelabel")
+            inner.addSpacing(10)
+            inner.addWidget(label)
+            for left, right in self._recent[:8]:
+                button = QPushButton(f"{ntpath.basename(left) or left}   vs   "
+                                     f"{ntpath.basename(right) or right}")
+                button.setProperty("role", "recent")
+                button.setToolTip(f"{left}\n{right}")
+                button.setFocusPolicy(Qt.TabFocus)
+                button.clicked.connect(lambda _c=False, l=left, r=right:
+                                       self.compareRequested.emit(l, r))
+                inner.addWidget(button)
 
         outer = QVBoxLayout(self)
         outer.addStretch(1)

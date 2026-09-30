@@ -523,7 +523,8 @@ made in a worker, not in the argument parser.
 
 ## Build order
 
-0. Done so far: steps 1 to 9, less Excel tables
+0. Done so far: steps 1 to 9, less Excel tables, and from step 10 the HTML
+   report and unified patch, recent pairs and the Explorer verbs
    (0.4.0: folder compare; 0.5.0: format-aware compare and the sibling
    handoff; 0.6.0: hex and image, with no new dependency -- Pillow was not
    needed; 0.7.0: CSV tables; 0.8.0: three-way merge and `--wait`) (0.2.0 added editing, saving and find; 0.3.0
@@ -554,8 +555,10 @@ made in a worker, not in the argument parser.
 7. **Hex and image.**
 8. **Three-way merge** and the git tool configuration.
 9. **Format-aware:** L5X first, then XML, JSON, CSV and Excel tables.
-10. Later: reports (HTML, unified patch), saved sessions, archive compare,
-    Explorer verbs, folder sync actions.
+10. Later: saved sessions, archive compare, folder sync actions (see Open
+    decisions), Excel tables (needs `openpyxl`), the one-column inline view
+    (Ctrl+Shift+I is reserved for it), moved-block detection, syntax colour
+    (needs `Pygments`).
 
 ## Open decisions
 

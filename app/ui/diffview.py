@@ -913,7 +913,6 @@ class DiffView(QWidget):
         (Qt.NoModifier, Qt.Key_Enter): "edit",
         (Qt.NoModifier, Qt.Key_F2): "edit",
         (Qt.ShiftModifier, Qt.Key_Return): "insert-line",
-        (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_I): "inline",
         (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_H): "report",
     }
 

@@ -43,13 +43,19 @@ class Rules:
     #: Regular expressions for text that does not matter, removed from a line
     #: before it is compared -- an export timestamp, a revision stamp.
     patterns: tuple[str, ...] = field(default_factory=tuple)
+    #: True: text after a line comment marker does not count, and a line that
+    #: is only a comment is looked past like a blank line.
+    comments: bool = False
+    #: The line comment markers for the files being compared, from their
+    #: extension (`comment_markers`). Set by the session, not the user.
+    markers: tuple[str, ...] = field(default_factory=tuple)
     #: Master switch (Ctrl+I): off compares raw text whatever is set above,
     #: without forgetting what is set.
     enabled: bool = True
 
     def active(self) -> "Rules":
         """The rules actually in force."""
-        return self if self.enabled else Rules(enabled=False)
+        return self if self.enabled else Rules(enabled=False, markers=self.markers)
 
     def toggled(self) -> "Rules":
         return replace(self, enabled=not self.enabled)
@@ -58,7 +64,8 @@ class Rules:
     def any(self) -> bool:
         """Whether any rule would change a comparison."""
         r = self.active()
-        return (r.whitespace != "none" or r.case or r.blank_lines or bool(r.patterns))
+        return (r.whitespace != "none" or r.case or r.blank_lines or bool(r.patterns)
+                or (r.comments and bool(r.markers)))
 
     def describe(self) -> str:
         """One line for the status bar: what is being looked past."""
@@ -72,6 +79,8 @@ class Rules:
             parts.append("case")
         if r.blank_lines:
             parts.append("blank lines")
+        if r.comments and r.markers:
+            parts.append("comments")
         if r.patterns:
             parts.append(f"{len(r.patterns)} pattern{'s' if len(r.patterns) != 1 else ''}")
         return "Ignoring " + ", ".join(parts) if parts else "Exact"
@@ -99,8 +108,11 @@ def normaliser(rules: Rules) -> Callable[[str], str]:
     compiled, _bad = compile_patterns(r.patterns)
     whitespace = r.whitespace
     fold = r.case
+    markers = r.markers if r.comments else ()
 
     def key(line: str) -> str:
+        if markers:
+            line = strip_comment(line, markers)
         for pattern in compiled:
             line = pattern.sub("", line)
         if whitespace == "trailing":
@@ -113,10 +125,54 @@ def normaliser(rules: Rules) -> Callable[[str], str]:
             line = line.casefold()
         return line
 
-    if not compiled and whitespace == "none" and not fold:
+    if not compiled and whitespace == "none" and not fold and not markers:
         return lambda line: line
     return key
 
 
 def is_blank(line: str) -> bool:
     return not line.strip()
+
+
+def strip_comment(line: str, markers: tuple[str, ...]) -> str:
+    """The line without its trailing comment. Naive on purpose -- a marker
+    inside a string is taken as a comment too -- because what it strips is
+    shown in grey as ignored, never hidden, and a language parser per
+    extension is a great deal of machinery for a rule that is off by default.
+    """
+    cut = len(line)
+    for marker in markers:
+        at = line.find(marker)
+        if at != -1 and at < cut:
+            if marker.isalpha() and at > 0 and line[at - 1].isalnum():
+                continue
+            cut = at
+    return line[:cut].rstrip() if cut < len(line) else line
+
+
+def only_comment(line: str, markers: tuple[str, ...]) -> bool:
+    return bool(line.strip()) and not strip_comment(line, markers).strip()
+
+
+#: Line comment markers by extension. Block comments are not covered.
+_MARKERS = {
+    ("py", "pyw", "sh", "bash", "ps1", "psm1", "yaml", "yml", "toml", "r", "pl", "rb",
+     "conf", "cmake", "mk", "dockerfile", "gitignore", "properties"): ("#",),
+    ("ini", "cfg", "inf", "reg"): (";", "#"),
+    ("c", "h", "cpp", "hpp", "cc", "cs", "java", "js", "ts", "jsx", "tsx", "go", "rs", "swift",
+     "kt", "scala", "php", "st", "scl", "css", "scss", "less", "jsonc", "l5k"): ("//",),
+    ("vb", "vbs", "bas", "cls", "frm", "vba"): ("'", "REM "),
+    ("bat", "cmd"): ("REM ", "rem ", "::"),
+    ("sql", "lua", "hs", "ada", "vhd", "vhdl"): ("--",),
+    ("asm", "s", "lisp", "el", "clj", "scm"): (";",),
+    ("m", "tex", "sty", "erl"): ("%",),
+}
+
+
+def comment_markers(path: str) -> tuple[str, ...]:
+    name = path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    ext = name.rsplit(".", 1)[-1] if "." in name else name
+    for extensions, markers in _MARKERS.items():
+        if ext in extensions:
+            return markers
+    return ()

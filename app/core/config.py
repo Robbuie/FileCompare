@@ -41,6 +41,7 @@ DEFAULTS: dict[str, Any] = {
     "compare.whitespace": "none",
     "compare.case": False,
     "compare.blank_lines": False,
+    "compare.comments": False,
     "compare.patterns": [],
     # "char" or "word": the granularity of the marks inside a changed line.
     "compare.intraline": "char",
@@ -65,6 +66,9 @@ DEFAULTS: dict[str, Any] = {
 
     # Keep `name.ext.orig` beside a file the first time it is saved.
     "save.backup": False,
+
+    # Pairs compared lately, newest first, as [left, right].
+    "recent": [],
 
     # The last folder each side of the start page browsed from.
     "start.left_folder": "",
