@@ -72,12 +72,20 @@ EXCLUDE_QT = [
 # picked up pytest would ship it.
 EXCLUDE_DEV = ["pytest", "_pytest", "tkinter", "unittest", "pydoc"]
 
+# 1.1: Pygments finds its lexers by name at run time (`get_lexer_by_name`,
+# `get_lexer_for_filename`), so nothing imports them where Analysis can see.
+# PyInstaller's own Pygments hook collects them; they are named here as well
+# so a hook that changes does not quietly ship a build that colours nothing.
+from PyInstaller.utils.hooks import collect_submodules
+
+HIDDEN = collect_submodules("pygments.lexers") + collect_submodules("pygments.styles")
+
 analysis = Analysis(
     [os.path.join(SPECPATH, "entry.py")],
     pathex=[ROOT],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=HIDDEN,
     hookspath=[],
     runtime_hooks=[],
     excludes=EXCLUDE_QT + EXCLUDE_DEV,

@@ -67,6 +67,19 @@ class ViewState:
     editable: tuple[bool, bool] = (False, False)
     #: What the find bar is looking for, compiled; None when it is closed.
     find: re.Pattern | None = None
+    #: 1.1: per side, `(lines, spans per line)` from `core/syntax.py`, or
+    #: None. Held with the very list it was lexed from, and used only while
+    #: that is still the list being drawn -- after an edit the rows move on
+    #: before a new lexing arrives, and old colours on new lines would be
+    #: colours on the wrong words.
+    syntax: list = field(default_factory=lambda: [None, None])
+
+    def syntax_spans(self, side: int, index: int):
+        held = self.syntax[side]
+        if held is None or held[0] is not self.lines[side]:
+            return None
+        spans = held[1]
+        return spans[index] if 0 <= index < len(spans) else None
 
     def selection(self) -> tuple[int, int]:
         """Rows selected, as `(first, stop)`."""
@@ -150,6 +163,19 @@ class _Painted(QWidget):
 
     def colour(self, name: str) -> QColor:
         return parse_colour(self.tokens.get(name))
+
+    def syntax_colours(self) -> list[QColor]:
+        """Index by `syntax.CATEGORIES`; 0 is the ordinary ink."""
+        cached = getattr(self, "_syntax_colours", None)
+        if cached is not None and cached[0] is self.tokens:
+            return cached[1]
+        from app.core.syntax import CATEGORIES
+
+        colours = [self.colour("txt_0")] + [
+            self.colour(f"syn_{name}") if self.tokens.get(f"syn_{name}")
+            else self.colour("txt_0") for name in CATEGORIES[1:]]
+        self._syntax_colours = (self.tokens, colours)
+        return colours
 
     def visible_rows(self) -> int:
         return max(1, self.height() // max(1, self.row_h))
@@ -293,10 +319,14 @@ class TextPane(_Painted):
                              Qt.AlignRight | Qt.AlignVCenter, str(index + 1))
             text = s.display(side, index)[first_col:first_col + cols]
             if text:
-                painter.setPen(ink)
                 painter.setClipRect(text_band)
-                painter.drawText(QRectF(text_x - offset, y, self.width(), self.row_h),
-                                 Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip, text)
+                spans = s.syntax_spans(side, index)
+                if not spans:
+                    painter.setPen(ink)
+                    painter.drawText(QRectF(text_x - offset, y, self.width(), self.row_h),
+                                     Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip, text)
+                else:
+                    self._paint_coloured(painter, text, spans, first_col, text_x - offset, y)
                 painter.setClipping(False)
 
         if s.rows and end <= s.first + self.visible_rows():
@@ -306,6 +336,35 @@ class TextPane(_Painted):
         painter.setPen(QPen(self.colour("line_soft"), 1))
         painter.drawLine(int(numbers), 0, int(numbers), self.height())
         painter.end()
+
+    def _paint_coloured(self, painter: QPainter, text: str, spans, first_col: int,
+                        x: float, y: float) -> None:
+        """One line in pieces, each in its category's colour. The pieces are
+        placed by column, which is the monospace assumption the marks already
+        make; a piece is never measured."""
+        colours = self.syntax_colours()
+        flags = Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip
+        end = first_col + len(text)
+        pos = first_col
+
+        def draw(start: int, stop: int, colour: QColor) -> None:
+            painter.setPen(colour)
+            painter.drawText(QRectF(x + (start - first_col) * self.char_w, y,
+                                    (stop - start + 1) * self.char_w, self.row_h),
+                             flags, text[start - first_col:stop - first_col])
+
+        for start, stop, cat in spans:
+            if stop <= pos:
+                continue
+            if start >= end:
+                break
+            if start > pos:
+                draw(pos, start, colours[0])
+            a, b = max(start, pos), min(stop, end)
+            draw(a, b, colours[cat] if cat < len(colours) else colours[0])
+            pos = b
+        if pos < end:
+            draw(pos, end, colours[0])
 
     def _paint_current(self, painter: QPainter) -> None:
         s = self.state
@@ -665,6 +724,12 @@ class DiffView(QWidget):
     def set_editable(self, left: bool, right: bool) -> None:
         self.state.editable = (left, right)
         self.gutter.update()
+
+    def set_syntax(self, side: int, lines: list[str] | None, spans) -> None:
+        """Colour for one side: the spans `core/syntax.highlight` made from
+        exactly `lines`, or None to draw that side in plain ink."""
+        self.state.syntax[side] = (lines, spans) if lines is not None and spans else None
+        (self.left, self.right)[side].update()
 
     def set_find(self, pattern: re.Pattern | None) -> None:
         self.state.find = pattern

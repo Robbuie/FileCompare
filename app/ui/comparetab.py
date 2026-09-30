@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.core import formats, siblings
+from app.core import formats, siblings, syntax
 from app.core import session as core
 from app.core.diff import align
 from app.core.rules import WHITESPACE, WHITESPACE_LABELS, Rules
@@ -53,6 +53,12 @@ from app.ui.tableview import TableView
 
 #: What the View switch offers, in order.
 VIEW_LABELS = {"text": "Text", "table": "Table", "hex": "Hex", "image": "Image"}
+
+
+def _syntax_job(lines: list[str], key: str):
+    """In the loader: the spans, returned with the list they were made from
+    so a late answer for lines no longer on screen is recognised and dropped."""
+    return lines, syntax.highlight(lines, key)
 
 
 def _table_job(left: list[str], right: list[str], options):
@@ -364,6 +370,10 @@ class CompareTab(QWidget):
         self._table_request = 0
         self._table_for = None
         self._hex_request = self._image_request = 0
+        #: 1.1: "auto" (by the file's name), "off", or a language key for
+        #: both sides; and the loader requests colouring each side.
+        self.language = session.options.syntax
+        self._syntax_requests = [0, 0]
         self._hex_for = self._image_for = None
         self.handoff = Handoff()
         self.handoff.launch.connect(self._launch_sibling)
@@ -505,7 +515,19 @@ class CompareTab(QWidget):
         self._view_menu = QMenu(self)
         self._view_menu.aboutToShow.connect(self._fill_view_menu)
         self._view_button.setMenu(self._view_menu)
+        # 1.1: the language the text is coloured as. Detected from the
+        # file's name; the menu picks another, or none.
+        self._language = QToolButton()
+        self._language.setProperty("role", "retry")
+        self._language.setFocusPolicy(Qt.NoFocus)
+        self._language.setPopupMode(QToolButton.InstantPopup)
+        self._language.setToolTip("The language the text is coloured as")
+        self._language_menu = QMenu(self)
+        self._language_menu.aboutToShow.connect(self._fill_language_menu)
+        self._language.setMenu(self._language_menu)
         box.addSpacing(6)
+        box.addWidget(self._language)
+        box.addSpacing(2)
         box.addWidget(self._view_button)
         box.addSpacing(8)
         self._copy_left = self._nav("copy_left", "Copy this difference to the left (Alt+Left)",
@@ -913,6 +935,7 @@ class CompareTab(QWidget):
                 self._shown_result = s.result
                 left, right = s.result_lines
                 self.view.set_comparison(s.result, left, right, s.options.intraline)
+                self._colour()
                 if self.find.isVisible():
                     self._find_changed()
             self.stack.setCurrentWidget(self.view)
@@ -934,6 +957,8 @@ class CompareTab(QWidget):
             button.setVisible(current is not self.images)
         self._view_button.setText("View: " + VIEW_LABELS.get(shown, "Text"))
         self._view_button.setVisible(kind in (core.TEXT, core.BINARY))
+        self._language.setVisible(current is self.view)
+        self._language.setText(self._language_label())
         self._update_position()
         self.titleChanged.emit()
 
@@ -981,6 +1006,75 @@ class CompareTab(QWidget):
         self.mode = mode
         self.refresh()
         self.focus_view()
+
+    # ------------------------------------------------------ syntax colour
+
+    def language_for(self, side: int) -> str:
+        """The language key one side is coloured as, "" for none."""
+        s = self.session
+        if self.language == "off":
+            return ""
+        if s.sides[side].structured:
+            # A side shown by its structure is canonical lines this
+            # application wrote, not the file's text; its colour would be
+            # the colour of the wrong language.
+            return ""
+        if self.language != "auto":
+            return self.language
+        lines = s.result_lines[side]
+        return syntax.detect(s.sides[side].path, lines[0] if lines else "")
+
+    def _language_label(self) -> str:
+        if self.language == "off":
+            return "Plain text"
+        keys = {self.language_for(0), self.language_for(1)} - {""}
+        if not keys:
+            return "Plain text"
+        return " / ".join(sorted(syntax.name_of(k) for k in keys))
+
+    def _colour(self) -> None:
+        """Colour both sides for the lines the view is drawing now: small
+        files on the spot, large ones in the loader, very large not at all."""
+        s = self.session
+        for side in (0, 1):
+            lines = s.result_lines[side]
+            key = self.language_for(side)
+            self._syntax_requests[side] = 0
+            if not key or not lines:
+                self.view.set_syntax(side, None, None)
+                continue
+            if syntax.size(lines) <= syntax.SYNC_LIMIT:
+                self.view.set_syntax(side, lines, syntax.highlight(lines, key))
+            else:
+                self._syntax_requests[side] = s._loader.submit(_syntax_job, lines, key)
+        self._language.setText(self._language_label())
+
+    def set_language(self, language: str) -> None:
+        self.language = language
+        self._colour()
+
+    def _fill_language_menu(self) -> None:
+        menu = self._language_menu
+        menu.clear()
+        s = self.session
+        detected = {syntax.detect(side.path, (lines[0] if lines else ""))
+                    for side, lines in zip(s.sides, s.result_lines)} - {""}
+        auto = menu.addAction("By the file's name" + (
+            f"  ({' / '.join(sorted(syntax.name_of(k) for k in detected))})"
+            if detected else "  (plain text)"))
+        auto.setCheckable(True)
+        auto.setChecked(self.language == "auto")
+        auto.triggered.connect(lambda _c=False: self.set_language("auto"))
+        off = menu.addAction("Plain text, no colour")
+        off.setCheckable(True)
+        off.setChecked(self.language == "off")
+        off.triggered.connect(lambda _c=False: self.set_language("off"))
+        menu.addSeparator()
+        for key, label in syntax.MENU:
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self.language == key)
+            action.triggered.connect(lambda _c=False, k=key: self.set_language(k))
 
     def _fill_view_menu(self) -> None:
         self._view_menu.clear()
@@ -1082,6 +1176,13 @@ class CompareTab(QWidget):
             if envelope.ok:
                 self.hex.set_data(*self._hex_data, envelope.value)
                 self._update_position()
+            return
+        if request in self._syntax_requests:
+            side = self._syntax_requests.index(request)
+            self._syntax_requests[side] = 0
+            lines = self.session.result_lines[side]
+            if envelope.ok and envelope.value is not None and envelope.value[0] is lines:
+                self.view.set_syntax(side, lines, envelope.value[1])
             return
         if request == self._table_request:
             self._table_request = 0

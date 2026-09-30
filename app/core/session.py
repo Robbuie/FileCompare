@@ -159,6 +159,8 @@ class Options:
     structure: bool = True
     #: The view the tab opens in: "auto", "text", "hex" or "image" (--mode).
     mode: str = "auto"
+    #: 1.1: syntax colour -- "auto" by the file's name, or "off".
+    syntax: str = "auto"
 
 
 class Session(QObject):

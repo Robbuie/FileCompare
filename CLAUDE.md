@@ -143,6 +143,10 @@ Holds what the UI renders.
   there; QPixmap is not).
 - `core/tables.py` -- CSV table compare: sniffed delimiter, columns matched
   by name, rows matched on a key column chosen automatically. Pure.
+- `core/syntax.py` -- syntax colour (1.1): the language from the file's
+  name, Pygments' lexers plus our own for L5K and Structured Text, and per
+  line `(start, stop, category)` spans in display columns. `theme/syntax.py`
+  holds the colours, fixed per theme like the diff colours.
 - `core/siblings.py` -- which pairs Redline PDF and DWG Viewer compare better,
   and where those install; `io/launch.py` starts them.
 - `core/session.py` -- one open comparison: its sides, its deadlines, its
@@ -233,7 +237,9 @@ by what was opened and can be switched from the tab's header.
   lines, and regex "unimportant" text shown in grey rather than hidden.
 - Moved-block detection shown as its own kind rather than as a delete plus an
   add.
-- Syntax colouring by extension, if a dependency is approved for it.
+- Syntax colour (1.1) by the file's name, about six hundred languages
+  through Pygments and L5K and Structured Text through our own lexers; a
+  language menu in the toolbar picks another or none.
 
 **Folder** -- recursive, both trees side by side.
 - Compare by size and time (instant), then by content (queued, cancellable,
@@ -537,6 +543,17 @@ made in a worker, not in the argument parser.
   role.** The folder tree's row washes vanished the moment the sheet styled
   `::item`; the verdict colours are carried by the text colour instead. A
   delegate is the way back to washes if they are wanted.
+- **Syntax colour is lexed over the whole file, and only drawn for the
+  lines it was lexed from.** A comment or string spans lines, so lexing a
+  line at a time colours half a file as a string. The spans are held with
+  the very list they came from (`ViewState.syntax`), and the view draws
+  them only while that list is still the one on screen: after an edit the
+  rows move on first, and old colours on new lines would land on the wrong
+  words. Small files are lexed on the spot (`SYNC_LIMIT`), large ones in the
+  loader, and past `LIMIT` not at all. Pygments must be given
+  `stripnl=False` -- its default strips leading blank lines and every span
+  after them lands one row high. A side shown by its structure is not
+  coloured: those are lines this application wrote.
 - **A file can change under an open tab.** Poll the two files on an interval
   (not a watcher; SMB change notification is unreliable) and offer a reload
   when one changes. Never reload over unsaved edits without asking.
@@ -583,10 +600,9 @@ made in a worker, not in the argument parser.
 ## Open decisions
 
 - **Folder sync actions** -- decided (1.0): handed to File Manager's queue.
-- **Dependencies to approve**, each only when its step arrives:
-  `Pillow` (image compare; File Manager already ships it),
-  `charset-normalizer` (encoding detection beyond BOM and UTF-8),
-  `Pygments` (syntax colouring), `openpyxl` (Excel tables).
+- **Dependencies** -- approved 2026-09-30: `Pygments` (syntax colour, 1.1),
+  `charset-normalizer` (encodings beyond BOM and UTF-8), `openpyxl` (Excel
+  tables). `Pillow` was never needed. Anything past these is asked again.
 
 ## Packaging and releasing
 

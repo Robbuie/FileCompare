@@ -270,6 +270,7 @@ class MainWindow(QMainWindow):
             folder_mask=str(self._config.get("folders.mask") or ""),
             mode=mode,
             format="text" if mode == "text" else "auto",
+            syntax="auto" if self._config.get("view.syntax") else "off",
         )
         session = Session(self._loader, left, right, options=options, titles=titles,
                           readonly=readonly)
@@ -446,6 +447,10 @@ class MainWindow(QMainWindow):
         automatic.setChecked(bool(self._config.get("updates.check_on_launch")))
         automatic.triggered.connect(
             lambda on: self._config.set("updates.check_on_launch", bool(on)))
+        colour = menu.addAction("Colour code by language")
+        colour.setCheckable(True)
+        colour.setChecked(bool(self._config.get("view.syntax")))
+        colour.triggered.connect(self._set_syntax)
         backup = menu.addAction("Keep a .orig copy on first save")
         backup.setCheckable(True)
         backup.setChecked(bool(self._config.get("save.backup")))
@@ -455,6 +460,15 @@ class MainWindow(QMainWindow):
         menu.addAction("Exit", self.close)
         menu.aboutToHide.connect(menu.deleteLater)
         menu.popup(at)
+
+    def _set_syntax(self, on: bool) -> None:
+        """The default for new tabs, and every open text tab now -- except
+        one whose language was picked by hand, which keeps it."""
+        self._config.set("view.syntax", bool(on))
+        for index in range(self.pages.count()):
+            page = self.pages.widget(index)
+            if isinstance(page, CompareTab) and page.language in ("auto", "off"):
+                page.set_language("auto" if on else "off")
 
     # -------------------------------------------------------------- updates
 

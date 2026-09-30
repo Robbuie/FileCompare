@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.theme import diff, qss
+from app.theme import diff, qss, syntax
 from app.theme.tokens import DENSITIES, DEFAULTS
 
 TEMPLATE = """
@@ -390,6 +390,7 @@ def tokens(
     """
     values = qss.build(theme, accent, density)
     values.update(diff.build(values))
+    values.update(syntax.build(values))
     return values
 
 

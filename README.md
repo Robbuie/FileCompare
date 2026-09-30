@@ -21,7 +21,8 @@ than by row.
   across, undo, and save in exactly the encoding, byte order mark and line
   endings the file was read with. Find in both sides. Rules for whitespace,
   case, blank lines, comments and "unimportant" patterns, which grey a
-  difference out rather than hide it.
+  difference out rather than hide it. Syntax colour for about six hundred
+  languages, L5K and Structured Text included.
 - **Folders**: both trees merged into one, with File Manager's verdicts
   (names without case, times within two seconds), filters, name masks, and a
   content compare for the pairs size and time cannot settle. **Sync** one

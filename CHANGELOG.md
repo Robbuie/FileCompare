@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.1.0 - syntax colour
+
+- **Text is coloured by its language**, found from the file's name: about
+  six hundred languages through Pygments -- C, C#, C++, VB.NET, VBScript,
+  PowerShell, batch, SQL, Python, JavaScript, XML, JSON, YAML, INI, TOML,
+  Markdown, G-code and the rest -- and two written here that Pygments does
+  not know: **L5K** (Logix's text export, with ladder instructions,
+  keywords, tag attributes and rung comments picked out) and **IEC 61131-3
+  Structured Text** (`.st`, `.scl`: keywords, types, `T#5s` and `16#FF`,
+  both comment styles).
+- A `.L5X` compared as plain text (Structure off) colours as XML, and a
+  `.nc` as G-code rather than what Pygments guesses.
+- The colours are quiet and fixed per theme -- a difference is still the
+  loudest thing on a row -- with a set each for the dark themes, the light
+  ones, and high contrast.
+- **The language button** beside the View switch says what the text is
+  coloured as, and picks another from a list of forty, or plain text.
+  "Colour code by language" in the menu sets the default for new tabs and
+  every open one.
+- A file with no extension is coloured when its first line says what it is
+  (`#!` or an XML declaration). A side shown by its structure is not
+  coloured. Very large files (over eight million characters) are not
+  coloured; large ones are coloured in the background.
+- New dependency: Pygments (BSD licence), in the installer.
+
 ## 1.0.0 - folder sync, run by File Manager
 
 - **Sync** on the folder view's toolbar: update left to right or right to

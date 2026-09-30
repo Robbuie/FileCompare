@@ -45,6 +45,8 @@ DEFAULTS: dict[str, Any] = {
     "compare.patterns": [],
     # "char" or "word": the granularity of the marks inside a changed line.
     "compare.intraline": "char",
+    # 1.1: colour text by its language, found from the file's name.
+    "view.syntax": True,
 
     # Seconds a side may take to load before it is shown as not answering.
     # Generous, because a large file on a slow share is not a dead one.
