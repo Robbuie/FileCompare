@@ -138,6 +138,8 @@ Holds what the UI renders.
 - `core/imagediff.py` -- decode and compare two images with QImage and
   QPainter's Difference composition, off the UI thread (QImage is safe
   there; QPixmap is not).
+- `core/tables.py` -- CSV table compare: sniffed delimiter, columns matched
+  by name, rows matched on a key column chosen automatically. Pure.
 - `core/siblings.py` -- which pairs Redline PDF and DWG Viewer compare better,
   and where those install; `io/launch.py` starts them.
 - `core/session.py` -- one open comparison: its sides, its deadlines, its
@@ -515,10 +517,10 @@ made in a worker, not in the argument parser.
 
 ## Build order
 
-0. Done so far: steps 1 to 7 and the L5X/XML/JSON/INI half of step 9
+0. Done so far: steps 1 to 7 and step 9 less Excel
    (0.4.0: folder compare; 0.5.0: format-aware compare and the sibling
    handoff; 0.6.0: hex and image, with no new dependency -- Pillow was not
-   needed) (0.2.0 added editing, saving and find; 0.3.0
+   needed; 0.7.0: CSV tables) (0.2.0 added editing, saving and find; 0.3.0
    the installer, updates, Explorer verbs and File Manager's compare rows,
    which shipped in File Manager 0.41.0).
    The window, title bar, tabs, start page, the command line and the

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0 - table compare
+
+- **Two CSV files open as one grid, rows matched on a key.** A tag list or a
+  schedule sorted differently from last week's is not every row changed: each
+  record is found wherever it is, and compared cell by cell. A cell that
+  differs shows `old -> new` in amber; a record on one side only is red or
+  green; the row header says which line of each file it is on.
+- **The key is chosen for you**: the first column whose values are present
+  and unique on both sides. The Key list picks another, or row position.
+- **Columns match by their names**, so a column moved in one file is not a
+  difference; a column in one file only says so in its heading.
+- Numbers compare by value (1.50 and 1.5 are the same) unless that is turned
+  off; case can be ignored; the first row can be data rather than names.
+  Differences only hides the records that match.
+- Semicolon, tab and bar delimiters are recognised as well as commas, and
+  quoted fields may hold the delimiter or line breaks, as Excel writes them.
+- The View switch moves a CSV pair between the table and plain text (where it
+  can be edited and saved). Excel workbooks are not read yet: that needs
+  `openpyxl` in the installer, which has not been agreed.
+
 ## 0.6.0 - hex and image compare
 
 - **Hex**: two binary files open side by side as rows of sixteen bytes,

@@ -49,9 +49,17 @@ from app.ui.diffview import DiffView
 from app.ui.folderview import FolderView
 from app.ui.hexview import HexView
 from app.ui.imageview import ImageView
+from app.ui.tableview import TableView
 
 #: What the View switch offers, in order.
-VIEW_LABELS = {"text": "Text", "hex": "Hex", "image": "Image"}
+VIEW_LABELS = {"text": "Text", "table": "Table", "hex": "Hex", "image": "Image"}
+
+
+def _table_job(left: list[str], right: list[str], options):
+    from app.core import tables
+
+    return tables.compare(tables.parse("\n".join(left), header=options.header),
+                          tables.parse("\n".join(right), header=options.header), options)
 
 #: What a side can be saved as, from its menu: (label, encoding, mark).
 SAVE_ENCODINGS = (
@@ -349,6 +357,12 @@ class CompareTab(QWidget):
         self.images = ImageView()
         self.images.toleranceChanged.connect(self._measure_images)
         self.images.command.connect(self._command)
+        self.table = TableView()
+        self.table.optionsChanged.connect(lambda _o: self._measure_table())
+        self.table.status.connect(self.status)
+        self.table.command.connect(self._command)
+        self._table_request = 0
+        self._table_for = None
         self._hex_request = self._image_request = 0
         self._hex_for = self._image_for = None
         self.handoff = Handoff()
@@ -372,6 +386,7 @@ class CompareTab(QWidget):
         self.stack.addWidget(self.handoff)
         self.stack.addWidget(self.hex)
         self.stack.addWidget(self.images)
+        self.stack.addWidget(self.table)
 
         self.heads = (SideHead(), SideHead())
         for index, head in enumerate(self.heads):
@@ -821,6 +836,7 @@ class CompareTab(QWidget):
             self.folders.apply_tokens(tokens)
         self.hex.apply_tokens(tokens)
         self.images.apply_tokens(tokens)
+        self.table.apply_tokens(tokens)
         self._head_spacer.setFixedWidth(self.view.gutter.width())
 
     # -------------------------------------------------------------- drawing
@@ -853,6 +869,8 @@ class CompareTab(QWidget):
             self._show_hex()
         elif shown == "image":
             self._show_images()
+        elif shown == "table":
+            self._show_table()
         elif kind == core.TEXT and s.result is not None:
             if s.result is not self._shown_result:
                 self._shown_result = s.result
@@ -869,7 +887,8 @@ class CompareTab(QWidget):
             self.stack.setCurrentWidget(self.message)
             self.message.say(*self._explain(kind))
         current = self.stack.currentWidget()
-        self._toolrow.setVisible(current in (self.view, self.message, self.hex, self.images))
+        self._toolrow.setVisible(current in (self.view, self.message, self.hex, self.images,
+                                             self.table))
         texty = current in (self.view, self.message)
         self._text_segments.setVisible(texty)
         for button in self._edit_buttons:
@@ -893,6 +912,10 @@ class CompareTab(QWidget):
         if all(l is not None and not l.binary for l in loaded) and not any(
                 l is not None and l.lossy for l in loaded):
             out.append("text")
+            from app.core import tables
+
+            if all(tables.is_table(side.path) or not side.path for side in s.sides):
+                out.append("table")
         if all(l is not None and l.data is not None for l in loaded):
             out.append("hex")
             if all(imagediff.is_image(side.path) or not side.path for side in s.sides):
@@ -911,6 +934,8 @@ class CompareTab(QWidget):
             return self.mode
         if "image" in modes and all(imagediff.is_image(side.path) for side in s.sides):
             return "image"
+        if "table" in modes and all(side.path for side in s.sides):
+            return "table"
         if s.kind == core.BINARY and "hex" in modes:
             return "hex"
         return "text"
@@ -929,7 +954,23 @@ class CompareTab(QWidget):
             action.setChecked(mode == shown)
             action.triggered.connect(lambda _c=False, m=mode: self.set_mode(m))
 
+    def _show_table(self) -> None:
+        self.stack.setCurrentWidget(self.table)
+        key = tuple(side.doc.revision if side.doc else -1 for side in self.session.sides) + \
+            tuple(id(side.doc) for side in self.session.sides)
+        if self._table_for != key:
+            self._table_for = key
+            self._measure_table()
+
+    def _measure_table(self) -> None:
+        s = self.session
+        self._table_request = s._loader.submit(
+            _table_job, list(s.sides[0].lines), list(s.sides[1].lines), self.table.options)
+
     def _navigate(self, where: str) -> None:
+        if self.stack.currentWidget() is self.table:
+            self.table.step(-1 if where in ("previous", "last") else 1)
+            return
         if self.stack.currentWidget() is self.hex:
             if where == "first":
                 self.hex.go(0)
@@ -1005,6 +1046,14 @@ class CompareTab(QWidget):
                 self.hex.set_data(*self._hex_data, envelope.value)
                 self._update_position()
             return
+        if request == self._table_request:
+            self._table_request = 0
+            if envelope.ok:
+                self.table.set_result(envelope.value)
+                self._update_position()
+            else:
+                self.status.emit(f"Could not read as a table: {envelope.error}")
+            return
         if request == self._image_request:
             self._image_request = 0
             if envelope.ok:
@@ -1072,6 +1121,14 @@ class CompareTab(QWidget):
 
     def _update_position(self) -> None:
         s = self.session
+        if self.stack.currentWidget() is self.table:
+            result = self.table.model.result
+            total = len(result.differences) if result else 0
+            for button in (self._first, self._prev, self._next, self._last):
+                button.setEnabled(total > 0)
+            self.count.setText(f"{total:,} record{'s' if total != 1 else ''} differ"
+                               if result else "Comparing...")
+            return
         if self.stack.currentWidget() is self.hex:
             current, total = self.hex.position()
             for button in (self._first, self._prev, self._next, self._last):
@@ -1180,6 +1237,8 @@ class CompareTab(QWidget):
             self.folders.focus()
         elif current in (self.hex, self.images):
             current.setFocus(Qt.OtherFocusReason)
+        elif current is self.table:
+            self.table.grid.setFocus(Qt.OtherFocusReason)
         else:
             self.view.setFocus(Qt.OtherFocusReason)
 
