@@ -217,7 +217,7 @@ class MainWindow(QMainWindow):
         if not self._may_close([page]):
             return
         if isinstance(page, CompareTab):
-            page.session.stop()
+            page.stop()
         # The page leaves the stack before its tab leaves the strip: removing
         # the tab moves the current index, and `_tab_changed` reads the stack.
         index = self._index_of(page)
@@ -260,10 +260,12 @@ class MainWindow(QMainWindow):
             timeout=float(self._config.get("load.timeout")),
             max_bytes=int(float(self._config.get("load.max_mb")) * 1024 * 1024),
             backup=bool(self._config.get("save.backup")),
+            folder_mask=str(self._config.get("folders.mask") or ""),
         )
         session = Session(self._loader, left, right, options=options, titles=titles,
                           readonly=readonly)
         tab = CompareTab(session, self._tokens)
+        tab.openPair.connect(lambda l, r: self.compare(l, r))
         tab.titleChanged.connect(lambda t=tab: self._retitle(t))
         tab.status.connect(lambda text, t=tab: self._tab_status(t, text))
         session.start()

@@ -144,6 +144,8 @@ class Options:
     max_bytes: int = io_load.MAX_BYTES
     backup: bool = False
     poll: bool = True
+    #: Folder compare's name mask, as typed (`core/folders.Mask`).
+    folder_mask: str = ""
 
 
 class Session(QObject):
@@ -417,8 +419,19 @@ class Session(QObject):
     def _open(self, index: int) -> None:
         side = self.sides[index]
         if not side.path:
-            side.state = EMPTY
-            self.changed.emit()
+            # Nothing on this side: a file only on the other side of a folder
+            # compare, or a new text. Compared against no lines at all, and
+            # "saved" only by Save as.
+            side.state = READY
+            side.kind = io_kind.FILE
+            side.loaded = io_load.Loaded(path="", ok=True, encoding="utf-8")
+            side.encoding, side.bom = "utf-8", False
+            side.doc = Document.from_lines([], [])
+            side.disk = None
+            if all(s.state == READY for s in self.sides):
+                self._compare()
+            else:
+                self.changed.emit()
             return
         side.state = LOADING
         side.error = ""

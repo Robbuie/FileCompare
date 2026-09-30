@@ -60,6 +60,9 @@ DEFAULTS: dict[str, Any] = {
     # Explorer's "Select left side": the path waiting for "Compare to left side".
     "explorer.left": "",
 
+    # Folder compare's names to include and leave out (`core/folders.Mask`).
+    "folders.mask": "-.git;-__pycache__;-Thumbs.db;-desktop.ini",
+
     # Keep `name.ext.orig` beside a file the first time it is saved.
     "save.backup": False,
 

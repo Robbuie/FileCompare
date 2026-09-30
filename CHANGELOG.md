@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.0 - folder compare
+
+Two folders open as one tree, every file and folder given a verdict, all the
+way down.
+
+- **Both trees, merged**: one name column, then size and time on the left, a
+  verdict, and time and size on the right. Only on the left is red, only on
+  the right green, on both and different amber; the newer time is bold on the
+  side that is newer. A folder says how many files under it differ.
+- **File Manager's rules**: names match without case, and times within two
+  seconds are the same time, so the two applications never disagree about
+  the same pair of files.
+- **Show**: all, differences, left newer (or only on the left), right newer,
+  same. A folder stays in view while anything under it does. Folders holding
+  differences open by themselves.
+- **Names**: a mask such as `*.L5X;*.ini` includes, `-.git;-*.bak` leaves
+  out files or whole folders. The default leaves out `.git`, `__pycache__`,
+  `Thumbs.db` and `desktop.ini`.
+- **Compare contents** reads the pairs size and time cannot settle -- same
+  size, different time -- and says which are really the same ("same content,
+  different time", in grey, not counted). Its menu reads every pair, or the
+  selected rows, or stops.
+- **Enter or double-click** opens a pair in a tab of its own. Alt+Down and
+  Alt+Up step through the files that differ. A file only on one side opens
+  against nothing, and can be saved over there with Save as.
+- The walk runs off the window's thread, lists rather than stats, never
+  follows a junction, and says "not answering" only when a side has found
+  nothing new for the timeout -- a slow share that is still answering is left
+  to finish.
+- Copying and deleting from the folder view is not here yet (see
+  CLAUDE.md's open decisions); File Manager is where files are moved.
+
 ## 0.3.0 - installer, updates, File Manager
 
 From here File Compare is installed rather than run from a checkout, and

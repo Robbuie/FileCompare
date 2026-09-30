@@ -288,6 +288,35 @@ QLabel[role="sidestate"] {{ color: {txt_1}; }}
 QLabel[role="sidestate"][state="bad"] {{ color: {warn}; }}
 QLabel[role="sidestate"][state="dirty"] {{ color: {accent_text}; font-weight: 600; }}
 
+/* Folder compare and table compare: item views inside the card, on the
+   card's own surface, with File Manager's quiet column headers. */
+QWidget[role="folderbar"] {{ background: {bg_1}; border-bottom: 1px solid {line_soft}; }}
+QTreeView[role="foldertree"], QTableView[role="grid"] {{
+    background: {bg_2};
+    alternate-background-color: {bg_2};
+    border: none;
+    outline: none;
+    gridline-color: {line_soft};
+    selection-background-color: {accent_row};
+    selection-color: {txt_0};
+}}
+QTreeView[role="foldertree"]::item {{ padding: 1px 4px; border: none; }}
+QTreeView[role="foldertree"]::item:selected, QTableView[role="grid"]::item:selected {{
+    background: {accent_row};
+    color: {txt_0};
+}}
+QHeaderView {{ background: {bg_1}; border: none; }}
+QHeaderView::section {{
+    background: {bg_1};
+    color: {txt_2};
+    border: none;
+    border-bottom: 1px solid {line_soft};
+    border-right: 1px solid {line_soft};
+    padding: 3px 6px;
+    font-size: {head_font};
+}}
+QTableCornerButton::section {{ background: {bg_1}; border: none; }}
+
 /* Find: a strip over the card, only while it is open. */
 QWidget[role="findbar"] {{ background: transparent; }}
 QLineEdit[role="findfield"] {{ font-family: {mono}; padding: 3px 8px; }}

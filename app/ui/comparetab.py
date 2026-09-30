@@ -44,6 +44,7 @@ from app.io.load import LABELS
 from app.io.longpath import display
 from app.ui import glyphs
 from app.ui.diffview import DiffView
+from app.ui.folderview import FolderView
 
 #: What a side can be saved as, from its menu: (label, encoding, mark).
 SAVE_ENCODINGS = (
@@ -275,6 +276,8 @@ class CompareTab(QWidget):
     status = Signal(str)
     #: Every save the tab asked for has finished, successfully or not.
     savesFinished = Signal(bool)
+    #: A pair to open in a tab of its own (from folder compare).
+    openPair = Signal(str, str)
 
     def __init__(self, session: core.Session, tokens: dict[str, str],
                  parent: QWidget | None = None) -> None:
@@ -285,6 +288,9 @@ class CompareTab(QWidget):
         self._matches: list[tuple[int, int]] = []
         self._pending_saves: set[int] = set()
         self._saves_ok = True
+        #: The other modes' views, made the first time the pair turns out to
+        #: need one. None until then.
+        self.folders: FolderView | None = None
 
         self.view = DiffView()
         self.view.currentChanged.connect(self._update_position)
@@ -326,7 +332,8 @@ class CompareTab(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 2, 8, 0)
         outer.setSpacing(6)
-        outer.addWidget(self._toolbar())
+        self._toolrow = self._toolbar()
+        outer.addWidget(self._toolrow)
         outer.addWidget(self.find)
         outer.addWidget(card, 1)
 
@@ -462,6 +469,8 @@ class CompareTab(QWidget):
         side = self.view.focused_side
         if name == "swap":
             s.swap()
+            if self.folders is not None:
+                self.folders.session.swap()
         elif name == "reload":
             self.reload()
         elif name == "rules":
@@ -540,6 +549,8 @@ class CompareTab(QWidget):
         side = self.session.sides[index]
         if side.doc is None:
             return False
+        if not side.path:
+            return self.save_side_as(index)
         if not side.editable:
             if side.readonly or (side.loaded is not None and side.loaded.lossy):
                 return self.save_side_as(index)
@@ -610,6 +621,8 @@ class CompareTab(QWidget):
         if self.session.dirty and not self._confirm_discard("Compare again from disk"):
             return
         self.session.reload()
+        if self.folders is not None:
+            self.folders.session.start()
 
     def _reload_side(self, index: int) -> None:
         side = self.session.sides[index]
@@ -713,6 +726,8 @@ class CompareTab(QWidget):
             button.setIcon(glyphs.icon(button.property("glyph"), colour=tokens["txt_1"],
                                        muted=tokens["txt_2"], size=16, ratio=ratio))
         self.view.apply_tokens(tokens)
+        if self.folders is not None:
+            self.folders.apply_tokens(tokens)
         self._head_spacer.setFixedWidth(self.view.gutter.width())
 
     # -------------------------------------------------------------- drawing
@@ -745,12 +760,38 @@ class CompareTab(QWidget):
                 if self.find.isVisible():
                     self._find_changed()
             self.stack.setCurrentWidget(self.view)
+        elif kind == core.FOLDERS:
+            self._shown_result = None
+            self.stack.setCurrentWidget(self._folder_view())
         else:
             self._shown_result = None
             self.stack.setCurrentWidget(self.message)
             self.message.say(*self._explain(kind))
+        self._toolrow.setVisible(self.stack.currentWidget() in (self.view, self.message))
         self._update_position()
         self.titleChanged.emit()
+
+    def _folder_view(self) -> FolderView:
+        if self.folders is None:
+            from app.core.folderdiff import FolderSession
+
+            s = self.session
+            folder = FolderSession(s._loader, s.sides[0].path, s.sides[1].path,
+                                   mask=s.options.folder_mask, timeout=s.options.timeout,
+                                   parent=self)
+            self.folders = FolderView(folder, self._tokens, mask=s.options.folder_mask)
+            self.folders.openPair.connect(self.openPair)
+            self.folders.status.connect(self.status)
+            self.folders.command.connect(self._command)
+            self.stack.addWidget(self.folders)
+            folder.start()
+        return self.folders
+
+    def stop(self) -> None:
+        """The tab is closing: stop polling, walking and reading."""
+        self.session.stop()
+        if self.folders is not None:
+            self.folders.session.stop()
 
     def _explain(self, kind: str) -> tuple[str, str]:
         s = self.session
@@ -764,10 +805,6 @@ class CompareTab(QWidget):
                       if side.state in (core.FAILED, core.SLOW)]
             return (f"{' and '.join(failed)} could not be read",
                     "The reason is over the side. Retry reads it again.")
-        if kind == core.FOLDERS:
-            return ("Two folders",
-                    "Folder compare arrives in a later version. For now, File Manager's "
-                    "Ctrl+Shift+F2 marks what differs between two folders by size and time.")
         if kind == core.MIXED:
             return ("A file and a folder",
                     "One side is a file and the other a folder. Choose two files.")
@@ -860,7 +897,10 @@ class CompareTab(QWidget):
                 f"compared in {result.elapsed * 1000:.0f} ms")
 
     def focus_view(self) -> None:
-        self.view.setFocus(Qt.OtherFocusReason)
+        if self.folders is not None and self.stack.currentWidget() is self.folders:
+            self.folders.focus()
+        else:
+            self.view.setFocus(Qt.OtherFocusReason)
 
     def set_rules(self, rules: Rules) -> None:
         self.session.set_rules(rules)

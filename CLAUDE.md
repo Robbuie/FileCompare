@@ -134,6 +134,10 @@ Holds what the UI renders.
   (Not yet written.)
 - `core/session.py` -- one open comparison: its sides, its deadlines, its
   result, its edits and saves.
+- `core/folders.py` -- folder compare's merged tree and its verdicts, masks
+  and show filters. Pure, like the engine.
+- `core/folderdiff.py` -- one folder comparison: two walks with a stall
+  deadline, the tree built off the UI thread, a content compare.
 - `core/document.py` -- one side's text while it is edited: lines, their
   endings, and undo/redo as splices. Pure; the tests prove it alone.
 - `core/loader.py` -- runs work off the UI thread and hands the answer back
@@ -149,8 +153,11 @@ Holds what the UI renders.
 - `io/longpath.py` -- the `\\?\` rule, ported from File Manager's `paths.py`.
 - `io/save.py` -- encode with the side's encoding, mark and per-line
   endings, write beside, check the file did not move, rename.
-- Later: `io/walk.py` (folder compare), and `io/worker.py` / `io/pool.py`
-  ported from File Manager.
+- `io/walk.py` -- a tree by `os.scandir`, junctions listed and not
+  followed, cancellable; and "are these two files the same bytes".
+- Later, if dead shares make it worth it: `io/worker.py` / `io/pool.py`
+  ported from File Manager, so a walk stuck in SMB can be killed rather than
+  abandoned.
 
 ### The row model
 
@@ -480,13 +487,20 @@ made in a worker, not in the argument parser.
   compared with what was read immediately before the rename, after the new
   bytes are on disk, not before writing them: a save to a share takes long
   enough for somebody else's save to land in between.
+- **Folder compare's deadline is a stall, not a total.** A walk that is still
+  finding files is a slow share, not a dead one; `FolderSession._tick` marks
+  a side not answering only when its count has not moved for the timeout.
+- **A tree view's `::item` rule in QSS switches off the model's background
+  role.** The folder tree's row washes vanished the moment the sheet styled
+  `::item`; the verdict colours are carried by the text colour instead. A
+  delegate is the way back to washes if they are wanted.
 - **A file can change under an open tab.** Poll the two files on an interval
   (not a watcher; SMB change notification is unreliable) and offer a reload
   when one changes. Never reload over unsaved edits without asking.
 
 ## Build order
 
-0. Done so far: steps 1 to 5 (0.2.0 added editing, saving and find; 0.3.0
+0. Done so far: steps 1 to 6 (0.4.0: folder compare) (0.2.0 added editing, saving and find; 0.3.0
    the installer, updates, Explorer verbs and File Manager's compare rows,
    which shipped in File Manager 0.41.0).
    The window, title bar, tabs, start page, the command line and the
