@@ -6,4 +6,4 @@ the diff engine, `io` does every read. See CLAUDE.md before adding to any of
 them.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.0 - Logix exports, XML, JSON and INI by structure
+
+- **Two .L5X exports compare by what the program says.** Each is rewritten
+  as one line per thing a controls engineer names -- the controller, each
+  data type and member, module, tag and its value, program, routine, rung and
+  its comment, structured text line, AOI and parameter, task -- with tags,
+  programs, routines, modules, types and tasks sorted by name. The export
+  date, export options and the created and edited dates and users are left
+  out, and the status line says so. Rungs keep their order, and their numbers
+  are not part of the line: one inserted rung is one difference, not a
+  renumbering of every rung after it.
+- **Differences are named by where they are.** The count over the view reads
+  "Difference 3 of 4 · Program MainProgram / MainRoutine / Rung 1".
+- Module configuration data is shown as a short hash, so a changed
+  configuration is one line naming the module rather than forty lines of hex.
+- **XML, JSON and INI** can be compared the same way from the new
+  **Structure** switch: XML with attribute order and layout ignored, JSON
+  with key order ignored, INI with section and key order and comments
+  ignored. Those three start with the switch off, since they are usually
+  edited; an L5X starts with it on. A side shown by structure is read-only,
+  and says to switch Structure off to edit.
+- A file that is not the format its name claims is compared as text, and the
+  status line says why.
+- **PDF and drawing pairs** open a page saying which sibling compares them
+  properly -- Redline PDF for PDF revisions, DWG Viewer for DWG, DXF and DWF
+  -- with a button that opens both files there, and one to compare here
+  anyway.
+
 ## 0.4.0 - folder compare
 
 Two folders open as one tree, every file and folder given a verdict, all the

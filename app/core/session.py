@@ -31,6 +31,7 @@ from dataclasses import dataclass, field, replace
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from app.core.diff import align
+from app.core import formats
 from app.core.document import ENDINGS, Document
 from app.core.loader import Envelope, Loader
 from app.core.rules import Rules
@@ -107,6 +108,9 @@ class Side:
     saving: bool = False
     #: The most recent save's problem, shown over the side until the next.
     save_error: str = ""
+    #: Shown through a format comparer (L5X, XML...): the lines are not the
+    #: file's, so nothing is edited or saved through them.
+    structured: bool = False
 
     @property
     def lines(self) -> list[str]:
@@ -122,12 +126,15 @@ class Side:
     def editable(self) -> bool:
         """Text that can be changed and written back without losing a byte."""
         return (self.doc is not None and not self.readonly and self.loaded is not None
-                and not self.loaded.lossy and not self.loaded.binary)
+                and not self.loaded.lossy and not self.loaded.binary and not self.structured)
 
     @property
     def why_not_editable(self) -> str:
         if self.doc is None:
             return "Nothing is loaded on this side"
+        if self.structured:
+            return ("Showing the file by its structure, which is not its text; "
+                    "switch Structure off to edit")
         if self.readonly:
             return "This side is read-only"
         if self.loaded is not None and self.loaded.lossy:
@@ -146,6 +153,10 @@ class Options:
     poll: bool = True
     #: Folder compare's name mask, as typed (`core/folders.Mask`).
     folder_mask: str = ""
+    #: "auto" picks a format comparer by extension; "text" never does.
+    format: str = "auto"
+    #: Whether a detected format comparer starts switched on.
+    structure: bool = True
 
 
 class Session(QObject):
@@ -168,6 +179,14 @@ class Session(QObject):
         #: The lines `result` was computed from. The view draws these, never
         #: the live documents, so rows and lines always agree.
         self.result_lines: tuple[list[str], list[str]] = ([], [])
+        #: Where each of those lines is in the file's structure, when a format
+        #: comparer made them; empty strings otherwise.
+        self.result_crumbs: tuple[list[str], list[str]] = ([], [])
+        #: What the format comparer looked past, or why it could not.
+        self.format_note = ""
+        self.format_kind = formats.PLAIN if self.options.format == "text" else \
+            formats.detect(left, right)
+        self.structure = self.options.structure and self.format_kind in formats.DEFAULT_ON
         self._result_revisions: tuple[int, int] = (-1, -1)
         self.comparing = False
         self.problem = ""
@@ -239,6 +258,13 @@ class Session(QObject):
             return
         self.options = replace(self.options, rules=rules)
         self._compare()
+
+    def set_structure(self, on: bool) -> None:
+        """The format comparer on or off (the toolbar's Structure switch)."""
+        on = on and self.format_kind != formats.PLAIN
+        if on != self.structure:
+            self.structure = on
+            self._compare()
 
     def set_intraline(self, mode: str) -> None:
         if mode != self.options.intraline:
@@ -479,8 +505,8 @@ class Session(QObject):
             self._compare_request = 0
             self.comparing = False
             if envelope.ok:
-                result, lines = envelope.value
-                self._take(result, lines, self._compare_revisions)
+                result, lines, crumbs, note = envelope.value
+                self._take(result, lines, self._compare_revisions, crumbs, note)
                 if not self.current:
                     # Edited while this ran: go again with the text as it is.
                     self._compare()
@@ -490,9 +516,12 @@ class Session(QObject):
                 self.problem = f"The comparison failed: {envelope.error}"
             self.changed.emit()
 
-    def _take(self, result: align.Comparison, lines, revisions) -> None:
+    def _take(self, result: align.Comparison, lines, revisions, crumbs=None,
+              note: str = "") -> None:
         self.result = result
         self.result_lines = lines
+        self.result_crumbs = crumbs or ([], [])
+        self.format_note = note
         self._result_revisions = revisions
         self.problem = ""
 
@@ -546,17 +575,30 @@ class Session(QObject):
             return
         lines = (list(left.lines), list(right.lines))
         revisions = self._revisions()
+        kind = self.format_kind if self.structure else formats.PLAIN
+        for side in self.sides:
+            side.structured = kind != formats.PLAIN
         if len(lines[0]) + len(lines[1]) <= SYNC_LINES:
             self._compare_request = 0
             self.comparing = False
-            self._take(align.compare(lines[0], lines[1], self.options.rules), lines, revisions)
+            result, shown, crumbs, note = _compare_job(lines, self.options.rules, kind)
+            self._take(result, shown, revisions, crumbs, note)
             self.changed.emit()
             return
         self.comparing = True
         self._compare_revisions = revisions
-        self._compare_request = self._loader.submit(_compare_job, lines, self.options.rules)
+        self._compare_request = self._loader.submit(_compare_job, lines, self.options.rules, kind)
         self.changed.emit()
 
 
-def _compare_job(lines, rules):
-    return align.compare(lines[0], lines[1], rules), lines
+def _compare_job(lines, rules, kind=formats.PLAIN):
+    """The diff, through a format comparer first when one is on. Returns the
+    result, the lines it was computed from, their crumbs, and the note."""
+    if kind == formats.PLAIN:
+        return align.compare(lines[0], lines[1], rules), lines, ([], []), ""
+    a = formats.normalise(kind, lines[0])
+    b = formats.normalise(kind, lines[1])
+    note = a.problem or b.problem or f"{formats.names()[kind]}: ignoring {a.ignored}"
+    shown = (a.lines, b.lines)
+    return align.compare(shown[0], shown[1], rules), shown, (a.crumbs, b.crumbs), note
+

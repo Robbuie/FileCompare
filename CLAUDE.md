@@ -130,8 +130,11 @@ Holds what the UI renders.
 - `core/rules.py` -- what counts as a difference: whitespace, case, line
   endings, regex "unimportant" text, per-format rules.
 - `core/formats/` -- format-aware comparers that normalise before the line
-  diff (L5X, XML, JSON, CSV). Each one is optional and says what it ignored.
-  (Not yet written.)
+  diff (L5X, XML, JSON, INI). Each returns canonical lines, a crumb per line
+  (where it is in the file's structure) and what it ignored. The session runs
+  them in the compare job; a side shown through one is read-only.
+- `core/siblings.py` -- which pairs Redline PDF and DWG Viewer compare better,
+  and where those install; `io/launch.py` starts them.
 - `core/session.py` -- one open comparison: its sides, its deadlines, its
   result, its edits and saves.
 - `core/folders.py` -- folder compare's merged tree and its verdicts, masks
@@ -487,6 +490,10 @@ made in a worker, not in the argument parser.
   compared with what was read immediately before the rename, after the new
   bytes are on disk, not before writing them: a save to a share takes long
   enough for somebody else's save to land in between.
+- **An L5X rung's number is in its crumb, never its line.** Put it in the
+  text and inserting one rung makes every later rung a difference. The same
+  goes for structured text line numbers. `test_formats.py` holds the fixture
+  pair that proves the four real changes are the only four differences.
 - **Folder compare's deadline is a stall, not a total.** A walk that is still
   finding files is a slow share, not a dead one; `FolderSession._tick` marks
   a side not answering only when its count has not moved for the timeout.
@@ -500,7 +507,9 @@ made in a worker, not in the argument parser.
 
 ## Build order
 
-0. Done so far: steps 1 to 6 (0.4.0: folder compare) (0.2.0 added editing, saving and find; 0.3.0
+0. Done so far: steps 1 to 6 and the L5X/XML/JSON/INI half of step 9
+   (0.4.0: folder compare; 0.5.0: format-aware compare and the sibling
+   handoff) (0.2.0 added editing, saving and find; 0.3.0
    the installer, updates, Explorer verbs and File Manager's compare rows,
    which shipped in File Manager 0.41.0).
    The window, title bar, tabs, start page, the command line and the

@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.core import formats, siblings
 from app.core import session as core
 from app.core.diff import align
 from app.core.rules import WHITESPACE, WHITESPACE_LABELS, Rules
@@ -268,6 +269,47 @@ class Message(QWidget):
         self.body.setText(body)
 
 
+class Handoff(QWidget):
+    """The page for a pair a sibling application compares better."""
+
+    launch = Signal()
+    anyway = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.title = QLabel()
+        self.title.setProperty("role", "starttitle")
+        self.title.setAlignment(Qt.AlignCenter)
+        self.body = QLabel()
+        self.body.setProperty("role", "note")
+        self.body.setAlignment(Qt.AlignCenter)
+        self.body.setWordWrap(True)
+        self.go = QPushButton()
+        self.go.setProperty("role", "primary")
+        self.go.clicked.connect(lambda _c=False: self.launch.emit())
+        self.here = QPushButton("Compare here anyway")
+        self.here.clicked.connect(lambda _c=False: self.anyway.emit())
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        buttons.addWidget(self.go)
+        buttons.addWidget(self.here)
+        buttons.addStretch(1)
+        box = QVBoxLayout(self)
+        box.addStretch(1)
+        box.addWidget(self.title)
+        box.addSpacing(6)
+        box.addWidget(self.body)
+        box.addSpacing(14)
+        box.addLayout(buttons)
+        box.addStretch(2)
+        box.setContentsMargins(60, 20, 60, 20)
+
+    def offer(self, sibling: siblings.Sibling) -> None:
+        self.title.setText(f"This pair compares best in {sibling.name}")
+        self.body.setText(sibling.does)
+        self.go.setText(f"Open both in {sibling.name}")
+
+
 class CompareTab(QWidget):
     """Emits `titleChanged` when the tab's label should change and `status`
     with a line for the window's status bar."""
@@ -291,6 +333,12 @@ class CompareTab(QWidget):
         #: The other modes' views, made the first time the pair turns out to
         #: need one. None until then.
         self.folders: FolderView | None = None
+        self.sibling = siblings.for_pair(session.sides[0].path, session.sides[1].path)
+        self._launch_request = 0
+        self.handoff = Handoff()
+        self.handoff.launch.connect(self._launch_sibling)
+        self.handoff.anyway.connect(self._compare_here)
+        session._loader.finished.connect(self._loader_answer)
 
         self.view = DiffView()
         self.view.currentChanged.connect(self._update_position)
@@ -305,6 +353,7 @@ class CompareTab(QWidget):
         self.stack = QStackedWidget()
         self.stack.addWidget(self.message)
         self.stack.addWidget(self.view)
+        self.stack.addWidget(self.handoff)
 
         self.heads = (SideHead(), SideHead())
         for index, head in enumerate(self.heads):
@@ -402,6 +451,17 @@ class CompareTab(QWidget):
                               + ("character" if mode == "char" else "word"))
             button.clicked.connect(lambda _c=False, m=mode: self._set_intraline(m))
             seg.addWidget(button)
+        self._structure = QPushButton("Structure")
+        self._structure.setProperty("role", "segment")
+        self._structure.setCheckable(True)
+        self._structure.setFocusPolicy(Qt.NoFocus)
+        kind = self.session.format_kind
+        self._structure.setToolTip(
+            f"Compare by {formats.names().get(kind, 'structure')}: what the file says, "
+            "not how it is laid out. Off compares and edits the plain text.")
+        self._structure.clicked.connect(lambda on: self.session.set_structure(bool(on)))
+        self._structure.setVisible(kind != formats.PLAIN)
+        seg.insertWidget(0, self._structure)
         box.addWidget(segments)
         box.addSpacing(8)
         self._copy_left = self._nav("copy_left", "Copy this difference to the left (Alt+Left)",
@@ -752,7 +812,10 @@ class CompareTab(QWidget):
         self._sync_toggles()
         self.view.set_editable(s.sides[0].editable, s.sides[1].editable)
         kind = s.kind
-        if kind == core.TEXT and s.result is not None:
+        if self.sibling is not None and kind in (core.TEXT, core.BINARY):
+            self.handoff.offer(self.sibling)
+            self.stack.setCurrentWidget(self.handoff)
+        elif kind == core.TEXT and s.result is not None:
             if s.result is not self._shown_result:
                 self._shown_result = s.result
                 left, right = s.result_lines
@@ -786,6 +849,28 @@ class CompareTab(QWidget):
             self.stack.addWidget(self.folders)
             folder.start()
         return self.folders
+
+    def _launch_sibling(self) -> None:
+        from app.io import launch
+
+        paths = [side.path for side in self.session.sides if side.path]
+        self._launch_request = self.session._loader.submit(
+            launch.start_each, self.sibling.programs, paths)
+        self.status.emit(f"Starting {self.sibling.name}...")
+
+    def _loader_answer(self, request: int, envelope) -> None:
+        if not request or request != self._launch_request:
+            return
+        self._launch_request = 0
+        if envelope.ok:
+            self.status.emit(f"Opened both in {self.sibling.name}")
+        else:
+            reason = envelope.error.split(": ", 1)[-1]
+            self.status.emit(f"{self.sibling.name}: {reason}")
+
+    def _compare_here(self) -> None:
+        self.sibling = None
+        self.refresh()
 
     def stop(self) -> None:
         """The tab is closing: stop polling, walking and reading."""
@@ -825,6 +910,7 @@ class CompareTab(QWidget):
         self.rules_button.setChecked(rules.enabled and rules.any)
         self.rules_button.setText("Rules" if not (rules.enabled and rules.any)
                                   else "Rules on")
+        self._structure.setChecked(self.session.structure)
         mode = self.session.options.intraline
         self._char.setChecked(mode == "char")
         self._word.setChecked(mode == "word")
@@ -861,6 +947,9 @@ class CompareTab(QWidget):
             noun = "difference" if total == 1 else "differences"
             text = (f"Difference {current} of {total}" if current
                     else f"{total} {noun}")
+            crumb = self._crumb()
+            if current and crumb:
+                text += f"  ·  {crumb}"
         self.count.setText(text)
         self.count.setProperty("state", state)
         self.count.style().unpolish(self.count)
@@ -869,6 +958,22 @@ class CompareTab(QWidget):
         self.heads[1].set_focused(self.view.focused_side == 1)
         if result is not None:
             self.status.emit(self._status_line(result))
+
+    def _crumb(self) -> str:
+        """Where the current difference is in the file's structure, when a
+        format comparer said so."""
+        s = self.session
+        index = self.view.state.current
+        if index is None or not s.result or index >= len(s.result.blocks):
+            return ""
+        block = s.result.blocks[index]
+        left_crumbs, right_crumbs = s.result_crumbs
+        for row in s.result.rows[block.start:block.end]:
+            if row[1] != align.NONE and row[1] < len(right_crumbs) and right_crumbs[row[1]]:
+                return right_crumbs[row[1]]
+            if row[0] != align.NONE and row[0] < len(left_crumbs) and left_crumbs[row[0]]:
+                return left_crumbs[row[0]]
+        return ""
 
     def _why_not_bytes(self) -> str:
         left, right = (side.loaded for side in self.session.sides)
@@ -893,7 +998,9 @@ class CompareTab(QWidget):
         if counts["ignored"]:
             parts.append(f"{counts['ignored']:,} ignored")
         lines = "  ·  ".join(parts) if parts else "no lines differ"
-        return (f"{lines}    {self.session.rules.describe()}    "
+        note = f"    {self.session.format_note}" if self.session.structure and \
+            self.session.format_note else ""
+        return (f"{lines}    {self.session.rules.describe()}{note}    "
                 f"compared in {result.elapsed * 1000:.0f} ms")
 
     def focus_view(self) -> None:
