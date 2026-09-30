@@ -42,6 +42,11 @@ SNIFF = 8192
 #: Files larger than this are not read as text. A setting; this is its default.
 MAX_BYTES = 512 * 1024 * 1024
 
+#: The bytes themselves are kept, for hex and image compare, up to this size.
+#: Past it a side is text only: two copies of a 300 MB log in memory to offer
+#: a hex view nobody asked for is a poor trade.
+KEEP_BYTES = 64 * 1024 * 1024
+
 _BOMS = (
     (codecs.BOM_UTF32_LE, "utf-32-le"),   # before UTF-16 LE, which it starts with
     (codecs.BOM_UTF32_BE, "utf-32-be"),
@@ -89,6 +94,8 @@ class Loaded:
     lines: list[str] = field(default_factory=list)
     #: The ending of each line ("\r\n", "\n", "\r" or ""), kept for the save.
     endings: list[str] = field(default_factory=list)
+    #: The bytes as read, for hex and image compare; None past `KEEP_BYTES`.
+    data: bytes | None = field(default=None, repr=False)
 
     @property
     def facts(self) -> str:
@@ -150,6 +157,7 @@ def decode_into(out: Loaded, data: bytes) -> None:
     """The ladder, on bytes already read. Separate so the tests can feed it
     bytes without touching a disk."""
     out.size = out.size or len(data)
+    out.data = data if len(data) <= KEEP_BYTES else None
     out.digest = hashlib.blake2b(data, digest_size=16).hexdigest()
     encoding, bom = _sniff(data)
     if encoding is None:

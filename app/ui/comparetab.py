@@ -41,11 +41,17 @@ from app.core import formats, siblings
 from app.core import session as core
 from app.core.diff import align
 from app.core.rules import WHITESPACE, WHITESPACE_LABELS, Rules
+from app.io import load as io_load
 from app.io.load import LABELS
 from app.io.longpath import display
 from app.ui import glyphs
 from app.ui.diffview import DiffView
 from app.ui.folderview import FolderView
+from app.ui.hexview import HexView
+from app.ui.imageview import ImageView
+
+#: What the View switch offers, in order.
+VIEW_LABELS = {"text": "Text", "hex": "Hex", "image": "Image"}
 
 #: What a side can be saved as, from its menu: (label, encoding, mark).
 SAVE_ENCODINGS = (
@@ -335,6 +341,16 @@ class CompareTab(QWidget):
         self.folders: FolderView | None = None
         self.sibling = siblings.for_pair(session.sides[0].path, session.sides[1].path)
         self._launch_request = 0
+        #: "auto", or what the View switch (or --mode) chose.
+        self.mode = session.options.mode if session.options.mode in VIEW_LABELS else "auto"
+        self.hex = HexView()
+        self.hex.currentChanged.connect(self._update_position)
+        self.hex.command.connect(self._command)
+        self.images = ImageView()
+        self.images.toleranceChanged.connect(self._measure_images)
+        self.images.command.connect(self._command)
+        self._hex_request = self._image_request = 0
+        self._hex_for = self._image_for = None
         self.handoff = Handoff()
         self.handoff.launch.connect(self._launch_sibling)
         self.handoff.anyway.connect(self._compare_here)
@@ -354,6 +370,8 @@ class CompareTab(QWidget):
         self.stack.addWidget(self.message)
         self.stack.addWidget(self.view)
         self.stack.addWidget(self.handoff)
+        self.stack.addWidget(self.hex)
+        self.stack.addWidget(self.images)
 
         self.heads = (SideHead(), SideHead())
         for index, head in enumerate(self.heads):
@@ -411,13 +429,13 @@ class CompareTab(QWidget):
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(2)
         self._first = self._nav("diff_first", "First difference (Home)",
-                                self.view.first_difference)
+                                lambda: self._navigate("first"))
         self._prev = self._nav("diff_prev", "Previous difference (Alt+Up)",
-                               self.view.previous_difference)
+                               lambda: self._navigate("previous"))
         self._next = self._nav("diff_next", "Next difference (Alt+Down)",
-                               self.view.next_difference)
+                               lambda: self._navigate("next"))
         self._last = self._nav("diff_last", "Last difference (End)",
-                               self.view.last_difference)
+                               lambda: self._navigate("last"))
         for button in (self._first, self._prev, self._next, self._last):
             box.addWidget(button)
         self.count = QLabel()
@@ -463,6 +481,17 @@ class CompareTab(QWidget):
         self._structure.setVisible(kind != formats.PLAIN)
         seg.insertWidget(0, self._structure)
         box.addWidget(segments)
+        self._text_segments = segments
+        self._view_button = QToolButton()
+        self._view_button.setProperty("role", "retry")
+        self._view_button.setFocusPolicy(Qt.NoFocus)
+        self._view_button.setPopupMode(QToolButton.InstantPopup)
+        self._view_button.setToolTip("Show this pair as text, as bytes, or as pictures")
+        self._view_menu = QMenu(self)
+        self._view_menu.aboutToShow.connect(self._fill_view_menu)
+        self._view_button.setMenu(self._view_menu)
+        box.addSpacing(6)
+        box.addWidget(self._view_button)
         box.addSpacing(8)
         self._copy_left = self._nav("copy_left", "Copy this difference to the left (Alt+Left)",
                                     lambda: self._command("copy-left"))
@@ -473,7 +502,9 @@ class CompareTab(QWidget):
         self._redo = self._nav("redo", "Redo on this side (Ctrl+Y)", lambda: self._command("redo"))
         self._save = self._nav("save", "Save this side (Ctrl+S); both with Ctrl+Shift+S",
                                lambda: self._command("save"))
-        for button in (self._copy_left, self._copy_right, self._undo, self._redo, self._save):
+        self._edit_buttons = (self._copy_left, self._copy_right, self._undo, self._redo,
+                              self._save)
+        for button in self._edit_buttons:
             box.addWidget(button)
         box.addSpacing(8)
         self._swap = self._nav("swap", "Swap sides (Ctrl+U)", self.session.swap)
@@ -788,6 +819,8 @@ class CompareTab(QWidget):
         self.view.apply_tokens(tokens)
         if self.folders is not None:
             self.folders.apply_tokens(tokens)
+        self.hex.apply_tokens(tokens)
+        self.images.apply_tokens(tokens)
         self._head_spacer.setFixedWidth(self.view.gutter.width())
 
     # -------------------------------------------------------------- drawing
@@ -812,9 +845,14 @@ class CompareTab(QWidget):
         self._sync_toggles()
         self.view.set_editable(s.sides[0].editable, s.sides[1].editable)
         kind = s.kind
-        if self.sibling is not None and kind in (core.TEXT, core.BINARY):
+        shown = self.shown_mode()
+        if self.sibling is not None and kind in (core.TEXT, core.BINARY) and self.mode == "auto":
             self.handoff.offer(self.sibling)
             self.stack.setCurrentWidget(self.handoff)
+        elif shown == "hex":
+            self._show_hex()
+        elif shown == "image":
+            self._show_images()
         elif kind == core.TEXT and s.result is not None:
             if s.result is not self._shown_result:
                 self._shown_result = s.result
@@ -830,9 +868,109 @@ class CompareTab(QWidget):
             self._shown_result = None
             self.stack.setCurrentWidget(self.message)
             self.message.say(*self._explain(kind))
-        self._toolrow.setVisible(self.stack.currentWidget() in (self.view, self.message))
+        current = self.stack.currentWidget()
+        self._toolrow.setVisible(current in (self.view, self.message, self.hex, self.images))
+        texty = current in (self.view, self.message)
+        self._text_segments.setVisible(texty)
+        for button in self._edit_buttons:
+            button.setVisible(texty)
+        for button in (self._first, self._prev, self._next, self._last):
+            button.setVisible(current is not self.images)
+        self._view_button.setText("View: " + VIEW_LABELS.get(shown, "Text"))
+        self._view_button.setVisible(kind in (core.TEXT, core.BINARY))
         self._update_position()
         self.titleChanged.emit()
+
+    # --------------------------------------------------------- the modes
+
+    def available_modes(self) -> list[str]:
+        """What the View switch can offer for this pair."""
+        from app.core import imagediff
+
+        s = self.session
+        out = []
+        loaded = [side.loaded for side in s.sides]
+        if all(l is not None and not l.binary for l in loaded) and not any(
+                l is not None and l.lossy for l in loaded):
+            out.append("text")
+        if all(l is not None and l.data is not None for l in loaded):
+            out.append("hex")
+            if all(imagediff.is_image(side.path) or not side.path for side in s.sides):
+                out.append("image")
+        return out or ["text"]
+
+    def shown_mode(self) -> str:
+        """Which of text, hex and image this pair is shown as now."""
+        from app.core import imagediff
+
+        s = self.session
+        if s.kind not in (core.TEXT, core.BINARY):
+            return "text"
+        modes = self.available_modes()
+        if self.mode in modes:
+            return self.mode
+        if "image" in modes and all(imagediff.is_image(side.path) for side in s.sides):
+            return "image"
+        if s.kind == core.BINARY and "hex" in modes:
+            return "hex"
+        return "text"
+
+    def set_mode(self, mode: str) -> None:
+        self.mode = mode
+        self.refresh()
+        self.focus_view()
+
+    def _fill_view_menu(self) -> None:
+        self._view_menu.clear()
+        shown = self.shown_mode()
+        for mode in self.available_modes():
+            action = self._view_menu.addAction(VIEW_LABELS[mode])
+            action.setCheckable(True)
+            action.setChecked(mode == shown)
+            action.triggered.connect(lambda _c=False, m=mode: self.set_mode(m))
+
+    def _navigate(self, where: str) -> None:
+        if self.stack.currentWidget() is self.hex:
+            if where == "first":
+                self.hex.go(0)
+            elif where == "last":
+                self.hex.go(len(self.hex.blocks) - 1)
+            else:
+                self.hex.step(1 if where == "next" else -1)
+            return
+        {"first": self.view.first_difference, "last": self.view.last_difference,
+         "next": self.view.next_difference, "previous": self.view.previous_difference}[where]()
+
+    def _pair_bytes(self) -> tuple[bytes, bytes]:
+        left, right = (side.loaded for side in self.session.sides)
+        return ((left.data if left is not None else b"") or b"",
+                (right.data if right is not None else b"") or b"")
+
+    def _show_hex(self) -> None:
+        from app.core import hexdiff
+
+        self.stack.setCurrentWidget(self.hex)
+        data = self._pair_bytes()
+        key = (id(data[0]), id(data[1]))
+        if self._hex_for != key:
+            self._hex_for = key
+            self._hex_request = self.session._loader.submit(hexdiff.compare, *data)
+            self._hex_data = data
+
+    def _show_images(self) -> None:
+        self.stack.setCurrentWidget(self.images)
+        data = self._pair_bytes()
+        key = (id(data[0]), id(data[1]))
+        if self._image_for != key:
+            self._image_for = key
+            self._measure_images(self.images.tolerance.value())
+
+    def _measure_images(self, tolerance: int) -> None:
+        from app.core import imagediff
+
+        data = self._pair_bytes()
+        self._image_request = self.session._loader.submit(imagediff.compare, data[0], data[1],
+                                                          tolerance)
 
     def _folder_view(self) -> FolderView:
         if self.folders is None:
@@ -859,7 +997,21 @@ class CompareTab(QWidget):
         self.status.emit(f"Starting {self.sibling.name}...")
 
     def _loader_answer(self, request: int, envelope) -> None:
-        if not request or request != self._launch_request:
+        if not request:
+            return
+        if request == self._hex_request:
+            self._hex_request = 0
+            if envelope.ok:
+                self.hex.set_data(*self._hex_data, envelope.value)
+                self._update_position()
+            return
+        if request == self._image_request:
+            self._image_request = 0
+            if envelope.ok:
+                self.images.set_result(envelope.value)
+                self.status.emit(self.images.describe())
+            return
+        if request != self._launch_request:
             return
         self._launch_request = 0
         if envelope.ok:
@@ -899,8 +1051,9 @@ class CompareTab(QWidget):
             both = all(side.loaded is not None and side.loaded.binary for side in s.sides)
             detail = ("Both files are binary" if both else "One side is binary")
             return ("The files differ",
-                    f"{detail}, so they were compared by content hash only. "
-                    "Hex compare arrives in a later version.")
+                    f"{detail} and larger than hex compare holds in memory "
+                    f"({io_load.KEEP_BYTES // (1024 * 1024)} MB), so they were compared "
+                    "by content hash only.")
         if s.problem:
             return "Could not compare", s.problem
         return "", ""
@@ -919,6 +1072,24 @@ class CompareTab(QWidget):
 
     def _update_position(self) -> None:
         s = self.session
+        if self.stack.currentWidget() is self.hex:
+            current, total = self.hex.position()
+            for button in (self._first, self._prev, self._next, self._last):
+                button.setEnabled(total > 0)
+            result = self.hex.result
+            if result is None:
+                text = "Comparing bytes..."
+            elif result.identical:
+                text = "Identical, byte for byte"
+            else:
+                noun = "difference" if total == 1 else "differences"
+                text = f"Difference {current} of {total}" if current else f"{total} {noun}"
+                if current:
+                    text += f"  ·  offset 0x{self.hex.blocks[current - 1][0] * 16:X}"
+                if result.left_size != result.right_size:
+                    text += (f"  ·  {result.left_size:,} and {result.right_size:,} bytes")
+            self.count.setText(text)
+            return
         result = s.result if s.kind == core.TEXT else None
         has = bool(result and result.differences)
         for button in (self._first, self._prev, self._next, self._last):
@@ -1004,8 +1175,11 @@ class CompareTab(QWidget):
                 f"compared in {result.elapsed * 1000:.0f} ms")
 
     def focus_view(self) -> None:
-        if self.folders is not None and self.stack.currentWidget() is self.folders:
+        current = self.stack.currentWidget()
+        if self.folders is not None and current is self.folders:
             self.folders.focus()
+        elif current in (self.hex, self.images):
+            current.setFocus(Qt.OtherFocusReason)
         else:
             self.view.setFocus(Qt.OtherFocusReason)
 

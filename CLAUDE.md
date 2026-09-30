@@ -133,6 +133,11 @@ Holds what the UI renders.
   diff (L5X, XML, JSON, INI). Each returns canonical lines, a crumb per line
   (where it is in the file's structure) and what it ignored. The session runs
   them in the compare job; a side shown through one is read-only.
+- `core/hexdiff.py` -- hex compare by offset, chunked so equal regions cost
+  one memory compare. Pure.
+- `core/imagediff.py` -- decode and compare two images with QImage and
+  QPainter's Difference composition, off the UI thread (QImage is safe
+  there; QPixmap is not).
 - `core/siblings.py` -- which pairs Redline PDF and DWG Viewer compare better,
   and where those install; `io/launch.py` starts them.
 - `core/session.py` -- one open comparison: its sides, its deadlines, its
@@ -494,6 +499,9 @@ made in a worker, not in the argument parser.
   text and inserting one rung makes every later rung a difference. The same
   goes for structured text line numbers. `test_formats.py` holds the fixture
   pair that proves the four real changes are the only four differences.
+- **A binary file of NULs every other byte reads as UTF-16.** That is the
+  sniffer doing its job (some PLC tools write exactly that), and it means a
+  test "binary" file must not be `b"\x00\x01" * n`.
 - **Folder compare's deadline is a stall, not a total.** A walk that is still
   finding files is a slow share, not a dead one; `FolderSession._tick` marks
   a side not answering only when its count has not moved for the timeout.
@@ -507,9 +515,10 @@ made in a worker, not in the argument parser.
 
 ## Build order
 
-0. Done so far: steps 1 to 6 and the L5X/XML/JSON/INI half of step 9
+0. Done so far: steps 1 to 7 and the L5X/XML/JSON/INI half of step 9
    (0.4.0: folder compare; 0.5.0: format-aware compare and the sibling
-   handoff) (0.2.0 added editing, saving and find; 0.3.0
+   handoff; 0.6.0: hex and image, with no new dependency -- Pillow was not
+   needed) (0.2.0 added editing, saving and find; 0.3.0
    the installer, updates, Explorer verbs and File Manager's compare rows,
    which shipped in File Manager 0.41.0).
    The window, title bar, tabs, start page, the command line and the

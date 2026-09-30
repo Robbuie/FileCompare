@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.0 - hex and image compare
+
+- **Hex**: two binary files open side by side as rows of sixteen bytes,
+  aligned by offset -- the right alignment for firmware images and fixed
+  layouts, where byte 0x1F4 means the same thing in both. Differing bytes are
+  marked in hex and in the characters beside them; bytes on one side only (a
+  longer file) are red or green. Next and previous step through runs of
+  differing rows, the count says the offset, and the map shows them all. Two
+  60 MB files that differ in one place compare in a few hundredths of a
+  second.
+- **Images** (PNG, JPEG, BMP, GIF, TIFF, WebP, ICO, SVG and whatever else
+  Qt reads): side by side with the differing pixels marked, overlay with an
+  opacity slider, swipe, blink (B), and difference, which dims the left image
+  and paints every differing pixel red. A tolerance sets how far apart two
+  pixels may be and still count as the same, so a re-saved JPEG does not
+  light up. The count says how many pixels differ and the box they are in.
+  One zoom and pan for both: Ctrl+wheel or + and -, 0 to fit, 1 for actual
+  size, drag to pan. Images of different sizes are compared where they
+  overlap, and say so.
+- **View** switch over each file pair: text, hex, or image, whichever the
+  pair can be. `--mode hex`, `--mode image` and `--mode text` open in one.
+- Files up to 64 MB keep their bytes for these views; a larger binary pair
+  is still compared by hash.
+
 ## 0.5.0 - Logix exports, XML, JSON and INI by structure
 
 - **Two .L5X exports compare by what the program says.** Each is rewritten

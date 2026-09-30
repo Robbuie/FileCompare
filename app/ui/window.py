@@ -253,7 +253,7 @@ class MainWindow(QMainWindow):
             self.tabs.moveTab(current, index)
 
     def _compare_page(self, left: str, right: str, *, titles=("", ""),
-                      readonly: set[str] | None = None) -> CompareTab:
+                      readonly: set[str] | None = None, mode: str = "auto") -> CompareTab:
         options = Options(
             rules=rules_from(self._config),
             intraline=self._config.get("compare.intraline"),
@@ -261,6 +261,8 @@ class MainWindow(QMainWindow):
             max_bytes=int(float(self._config.get("load.max_mb")) * 1024 * 1024),
             backup=bool(self._config.get("save.backup")),
             folder_mask=str(self._config.get("folders.mask") or ""),
+            mode=mode,
+            format="text" if mode == "text" else "auto",
         )
         session = Session(self._loader, left, right, options=options, titles=titles,
                           readonly=readonly)
@@ -318,7 +320,7 @@ class MainWindow(QMainWindow):
         if len(request.paths) == 2:
             self.compare(request.paths[0], request.paths[1],
                          titles=(request.left_title, request.right_title),
-                         readonly=request.readonly)
+                         readonly=request.readonly, mode=request.mode)
         elif len(request.paths) == 1:
             self.new_tab(request.paths[0])
         elif not self.pages.count():

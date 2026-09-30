@@ -157,6 +157,8 @@ class Options:
     format: str = "auto"
     #: Whether a detected format comparer starts switched on.
     structure: bool = True
+    #: The view the tab opens in: "auto", "text", "hex" or "image" (--mode).
+    mode: str = "auto"
 
 
 class Session(QObject):
