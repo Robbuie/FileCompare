@@ -31,11 +31,11 @@ def main() -> int:
     app.setApplicationName("File Compare")
     app.setApplicationVersion(__version__)
 
-    if instance.hand_over(argv, cwd):
+    request = cli.parse(argv, cwd)
+    if not request.wait and instance.hand_over(argv, cwd):
         return 0
 
     config = Config.load()
-    request = cli.parse(argv, cwd)
     if request.select_left:
         # Explorer's "Select left side" with no window open: remember it and
         # go. A window that flashes up to say "noted" is worse than none.
@@ -47,9 +47,13 @@ def main() -> int:
     window = MainWindow(config, look=look, look_source=source)
 
     listener = instance.Listener()
-    listener.received.connect(
-        lambda args, where: (window.open_request(cli.parse(args, where)), window.bring_forward()))
-    listener.listen()
+    if not request.wait:
+        # A window started for git is git's: it does not take other launches'
+        # tabs, which would keep git waiting on a window full of other work.
+        listener.received.connect(
+            lambda args, where: (window.open_request(cli.parse(args, where)),
+                                 window.bring_forward()))
+        listener.listen()
 
     window.open_request(request)
     if config.get("window.maximized"):
@@ -61,6 +65,10 @@ def main() -> int:
     # A downloaded, verified update runs once the window is gone, so the
     # installer is not waiting on files this process still holds.
     window.updates.install_staged()
+    if request.merge:
+        # What git's mergetool reads: 0 only when the merge was saved with
+        # nothing left unresolved.
+        return 0 if window.merge_ok else 1
     return code
 
 

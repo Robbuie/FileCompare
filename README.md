@@ -59,7 +59,7 @@ again while File Compare is open adds a tab to the window already open.
 [diff]
     tool = filecompare
 [difftool "filecompare"]
-    cmd = FileCompare.exe \"$LOCAL\" \"$REMOTE\" --readonly left
+    cmd = FileCompare.exe \"$LOCAL\" \"$REMOTE\" --readonly left --wait
 [merge]
     tool = filecompare
 [mergetool "filecompare"]

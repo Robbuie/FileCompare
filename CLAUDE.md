@@ -126,7 +126,10 @@ Holds what the UI renders.
 - `core/diff/intraline.py` -- character and word differences inside a changed
   line pair, computed lazily for lines on screen.
 - `core/diff/align.py` -- turns opcodes into the **row model** (below).
-- `core/diff/merge3.py` -- three-way merge and conflict detection.
+- `core/diff/merge3.py` -- three-way merge: sync points where both sides
+  kept a base line, chunks between them, conflicts, resolutions, output with
+  git's markers for anything unresolved. Pure.
+- `core/mergesession.py` -- one merge: three reads, the merge, the save.
 - `core/rules.py` -- what counts as a difference: whitespace, case, line
   endings, regex "unimportant" text, per-format rules.
 - `core/formats/` -- format-aware comparers that normalise before the line
@@ -402,7 +405,10 @@ made in a worker, not in the argument parser.
 - **Single instance.** A second launch hands its arguments to the running
   window over a named local socket (`QLocalServer`) and exits; the pair opens
   as a new tab. Pressing Ctrl+F2 five times in File Manager gives one window
-  with five tabs.
+  with five tabs. **Except `--wait` and `--merge`**: git waits for the
+  program it started and deletes its temporary files when it exits, so those
+  run in a window of their own that takes no hand-overs, and exit when it
+  closes.
 - **Found by name.** The installer registers `FileCompare.exe` under
   `HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths` *and* puts
   the install folder on the user's PATH. App Paths alone is not enough:
@@ -517,10 +523,10 @@ made in a worker, not in the argument parser.
 
 ## Build order
 
-0. Done so far: steps 1 to 7 and step 9 less Excel
+0. Done so far: steps 1 to 9, less Excel tables
    (0.4.0: folder compare; 0.5.0: format-aware compare and the sibling
    handoff; 0.6.0: hex and image, with no new dependency -- Pillow was not
-   needed; 0.7.0: CSV tables) (0.2.0 added editing, saving and find; 0.3.0
+   needed; 0.7.0: CSV tables; 0.8.0: three-way merge and `--wait`) (0.2.0 added editing, saving and find; 0.3.0
    the installer, updates, Explorer verbs and File Manager's compare rows,
    which shipped in File Manager 0.41.0).
    The window, title bar, tabs, start page, the command line and the

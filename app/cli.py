@@ -11,6 +11,7 @@ not to code.
     FileCompare.exe <left> <right> --readonly left|right|both
     FileCompare.exe <left> <right> --mode text
     FileCompare.exe --merge <mine> <theirs> <base> -o <output>
+    FileCompare.exe <left> <right> --wait         stay until closed (git difftool)
     FileCompare.exe --select-left <path>      Explorer's "Select left side"
     FileCompare.exe --with-left <path>        Explorer's "Compare to left side"
 
@@ -41,6 +42,10 @@ class Request:
     mode: str = "auto"
     merge: bool = False
     output: str = ""
+    #: Stay in this process and exit when the window closes, rather than
+    #: handing over to a window already open: git's difftool and mergetool
+    #: wait for the program they started. `--merge` implies it.
+    wait: bool = False
     #: Explorer's verbs: remember a left side, or compare against it.
     select_left: str = ""
     with_left: str = ""
@@ -67,6 +72,7 @@ def _parser() -> _Parser:
     parser.add_argument("--mode", choices=MODES, default="auto")
     parser.add_argument("--merge", action="store_true")
     parser.add_argument("-o", "--output", default="")
+    parser.add_argument("--wait", action="store_true")
     parser.add_argument("--select-left", default="")
     parser.add_argument("--with-left", default="")
     return parser
@@ -86,6 +92,7 @@ def parse(argv: list[str], cwd: str = "") -> Request:
         right_title=args.right_title,
         mode=args.mode,
         merge=args.merge,
+        wait=args.wait or args.merge,
         output=resolve(args.output, cwd) if args.output else "",
         select_left=resolve(args.select_left, cwd) if args.select_left else "",
         with_left=resolve(args.with_left, cwd) if args.with_left else "",

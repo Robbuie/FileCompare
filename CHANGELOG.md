@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.0 - three-way merge, and git
+
+- **Three-way merge**: `FileCompare.exe --merge <mine> <theirs> <base> -o
+  <output>` opens a merge tab. Changes made on one side only, and the same
+  change made on both, are taken on their own; what both sides changed
+  differently is a conflict.
+- **One change at a time**: the current change is shown as it is in mine, the
+  base and theirs, with a few lines around it, and settled with Take mine
+  (Alt+Left), Take theirs (Alt+Right), mine then theirs, theirs then mine,
+  the base, or Edit to write it by hand. Settling a conflict moves on to the
+  next. Ctrl+Alt+Down and Up step through conflicts, Alt+Down and Up through
+  every change.
+- **The output** is shown whole under them, every change washed in its
+  colour and conflicts red until settled. An unsettled conflict is written
+  with git's markers, and saving with one left asks first. Edit freely turns
+  the output into a plain editor for the last touches. It is saved in mine's
+  encoding and line endings, beside and then renamed.
+- **git**: a merge exits 0 only when the output was saved with nothing
+  unresolved, which is what `mergetool.trustExitCode` reads. `--wait` keeps a
+  compare in its own window until it is closed, which is what `difftool`
+  needs; `--merge` always waits. The README has the `.gitconfig` lines.
+
 ## 0.7.0 - table compare
 
 - **Two CSV files open as one grid, rows matched on a key.** A tag list or a

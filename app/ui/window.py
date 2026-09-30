@@ -39,6 +39,7 @@ from app.theme import sheet
 from app.theme.tokens import ACCENT_LABELS, ACCENTS, DENSITIES, DENSITY_LABELS, THEME_LABELS, THEMES
 from app.ui import glyphs, winframe
 from app.ui.comparetab import CompareTab
+from app.ui.mergetab import MergeTab
 from app.ui.starttab import StartTab
 from app.ui.titlebar import TitleBar
 
@@ -90,6 +91,8 @@ class MainWindow(QMainWindow):
         self._loader = Loader(self)
         self._tokens = sheet.tokens(**self._look)
         self._titlebar: TitleBar | None = None
+        #: Set when a merge tab saved with nothing unresolved (git's answer).
+        self.merge_ok = False
         self._frame: winframe.NativeFrame | None = None
 
         self.setWindowTitle("File Compare")
@@ -216,7 +219,7 @@ class MainWindow(QMainWindow):
             return
         if not self._may_close([page]):
             return
-        if isinstance(page, CompareTab):
+        if isinstance(page, (CompareTab, MergeTab)):
             page.stop()
         # The page leaves the stack before its tab leaves the strip: removing
         # the tab moves the current index, and `_tab_changed` reads the stack.
@@ -290,6 +293,26 @@ class MainWindow(QMainWindow):
             self._add_page(tab)
         return tab
 
+    def merge(self, mine: str, theirs: str, base: str, *, output: str = "") -> MergeTab:
+        from app.core.mergesession import MergeSession
+
+        session = MergeSession(self._loader, mine, theirs, base, output,
+                               max_bytes=int(float(self._config.get("load.max_mb")) * 1024 * 1024))
+        tab = MergeTab(session, self._tokens)
+        tab.titleChanged.connect(lambda t=tab: self._retitle(t))
+        tab.status.connect(lambda text, t=tab: self._tab_status(t, text))
+        tab.finished.connect(self._merge_finished)
+        session.start()
+        current = self.pages.currentWidget()
+        self._add_page(tab)
+        if isinstance(current, StartTab) and self.pages.count() == 2 \
+                and not any(f.text().strip() for f in current.fields):
+            self.close_page(current)
+        return tab
+
+    def _merge_finished(self, ok: bool) -> None:
+        self.merge_ok = ok
+
     def open_request(self, request: Request) -> None:
         if request.select_left:
             self._config.set("explorer.left", request.select_left)
@@ -313,9 +336,7 @@ class MainWindow(QMainWindow):
                 self.new_tab()
             return
         if request.merge:
-            self.flash("Three-way merge arrives in a later version; "
-                       "showing mine against theirs.")
-            self.compare(request.paths[0], request.paths[1], readonly={"left", "right"})
+            self.merge(*request.paths[:3], output=request.output)
             return
         if len(request.paths) == 2:
             self.compare(request.paths[0], request.paths[1],
@@ -350,7 +371,7 @@ class MainWindow(QMainWindow):
                 button.setIcon(glyphs.icon("close", colour=self._tokens["txt_2"],
                                            muted=self._tokens["txt_2"], size=10))
         for page in self._pages():
-            if isinstance(page, CompareTab):
+            if isinstance(page, (CompareTab, MergeTab)):
                 page.apply_tokens(self._tokens)
         where = "File Manager's look" if source == "file manager" else "own look"
         self._status_right.setText(
@@ -555,7 +576,7 @@ class MainWindow(QMainWindow):
         nothing was unsaved, it was saved, or it was deliberately discarded."""
         from PySide6.QtCore import QEventLoop, QTimer
 
-        dirty = [p for p in pages if isinstance(p, CompareTab) and p.session.dirty]
+        dirty = [p for p in pages if isinstance(p, (CompareTab, MergeTab)) and p.session.dirty]
         for page in dirty:
             self.tabs.setCurrentIndex(self._index_of(page))
             box = QMessageBox(self)

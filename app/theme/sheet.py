@@ -317,6 +317,15 @@ QHeaderView::section {{
 }}
 QTableCornerButton::section {{ background: {bg_1}; border: none; }}
 
+/* The merge tab's passages and output: text surfaces inside the card. */
+QPlainTextEdit[role="passage"] {{
+    font-family: {mono};
+    background: {bg_2};
+    color: {txt_0};
+    border: 1px solid {line_soft};
+    border-radius: {radius_sm};
+}}
+
 /* Find: a strip over the card, only while it is open. */
 QWidget[role="findbar"] {{ background: transparent; }}
 QLineEdit[role="findfield"] {{ font-family: {mono}; padding: 3px 8px; }}
