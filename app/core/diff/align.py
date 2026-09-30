@@ -293,3 +293,21 @@ def _blocks(rows: list[Row]) -> list[Block]:
             blocks.append(Block(start, index, summary, bool(real)))
             start = None
     return blocks
+
+
+def side_range(rows: Sequence[Row], start: int, end: int, side: int) -> tuple[int, int]:
+    """The lines of one side that rows `start:end` show, as `(first, stop)`.
+
+    Rows only ever show a side's lines in order, so the lines a run of rows
+    holds are contiguous. A run that holds none of that side's lines -- a
+    block that exists only on the other side -- gives an empty range at the
+    place those lines would go: just after the nearest line above it, which is
+    where copying the block across has to insert it.
+    """
+    found = [rows[r][side] for r in range(start, end) if rows[r][side] != NONE]
+    if found:
+        return found[0], found[-1] + 1
+    for r in range(start - 1, -1, -1):
+        if rows[r][side] != NONE:
+            return rows[r][side] + 1, rows[r][side] + 1
+    return 0, 0

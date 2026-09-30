@@ -63,9 +63,35 @@ def settle(app, window, seconds: float = 10.0) -> None:
         app.processEvents()
 
 
+def act(app, page, actions) -> None:
+    """Drive the tab the way keys would, for a preview of a state rather than
+    of a fresh window. Each action is one of:
+
+      NAME            a tab command, as the view's keys send them ("copy-left")
+      find=TEXT       open the find bar and type TEXT
+      select=S,A,B    select rows A to B on side S
+      next            press next difference
+    """
+    for action in actions or ():
+        name, _, value = action.partition("=")
+        if name == "find":
+            page.open_find()
+            page.find.field.setText(value)
+        elif name == "select":
+            side, first, stop = (int(v) for v in value.split(","))
+            page.view.select_rows(side, first, stop)
+        elif name == "next":
+            page.view.next_difference()
+        else:
+            page._command(name)
+        for _ in range(3):
+            app.processEvents()
+            time.sleep(0.02)
+
+
 def render(out: str, *, pair=DEFAULT_PAIR, start: bool = False, theme="dark",
            accent="blue", density="normal", width=1400, height=820, step: int = 0,
-           rules=None) -> str:
+           rules=None, actions=None) -> str:
     app, window = build(theme, accent, density, width, height)
     if start:
         window.new_tab()
@@ -78,8 +104,12 @@ def render(out: str, *, pair=DEFAULT_PAIR, start: bool = False, theme="dark",
     page = window.pages.currentWidget()
     for _ in range(step):
         page.view.next_difference()
+    act(app, page, actions)
+    settle(app, window, 3)
     app.processEvents()
     window.grab().save(out)
+    # A preview that edited something must not stop on "unsaved changes".
+    window._may_close = lambda pages: True
     window.close()
     return out
 
@@ -96,6 +126,8 @@ def main() -> int:
     parser.add_argument("--step", type=int, default=0, help="press next difference N times")
     parser.add_argument("--all-themes", action="store_true")
     parser.add_argument("--out-dir", default="previews")
+    parser.add_argument("--do", action="append", default=[],
+                        help="a tab command before the picture; see act()")
     args = parser.parse_args()
     width, height = (int(v) for v in args.size.lower().split("x"))
 
@@ -111,7 +143,7 @@ def main() -> int:
         return 0
     print(render(args.out, pair=args.pair, start=args.start, theme=args.theme,
                  accent=args.accent, density=args.density, width=width, height=height,
-                 step=args.step))
+                 step=args.step, actions=args.do))
     return 0
 
 

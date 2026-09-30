@@ -23,11 +23,19 @@ instead would be correct and would cost a font measurement per mark per paint.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
-from PySide6.QtWidgets import QHBoxLayout, QScrollBar, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen, QPolygonF
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QPlainTextEdit,
+    QScrollBar,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.core.diff import align, intraline
 
@@ -51,6 +59,19 @@ class ViewState:
     current: int | None = None          # index into blocks
     mode: str = "char"
     marks: dict = field(default_factory=dict)  # row -> (left spans, right spans)
+    #: The selection: rows `anchor` to `cursor`, on the focused side.
+    cursor: int = 0
+    anchor: int = 0
+    side: int = 0
+    #: Which sides can be edited, so the gutter offers only real copies.
+    editable: tuple[bool, bool] = (False, False)
+    #: What the find bar is looking for, compiled; None when it is closed.
+    find: re.Pattern | None = None
+
+    def selection(self) -> tuple[int, int]:
+        """Rows selected, as `(first, stop)`."""
+        lo, hi = sorted((self.anchor, self.cursor))
+        return lo, hi + 1
 
     def display(self, side: int, index: int) -> str:
         if index == align.NONE:
@@ -103,6 +124,10 @@ class _Painted(QWidget):
 
     wheeled = Signal(int)
     clicked = Signal(int)
+    #: (row, extend): a press, and whether Shift was held.
+    pressed = Signal(int, bool)
+    dragged = Signal(int)
+    doubleClicked = Signal(int)
 
     def __init__(self, state: ViewState, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -135,10 +160,23 @@ class _Painted(QWidget):
             self.wheeled.emit(int(-steps * WHEEL_ROWS) or (-1 if steps > 0 else 1))
         event.accept()
 
+    def row_at(self, y: float) -> int:
+        return self.state.first + int(y // max(1, self.row_h))
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
-            self.clicked.emit(self.state.first + int(event.position().y() // self.row_h))
+            row = self.row_at(event.position().y())
+            self.pressed.emit(row, bool(event.modifiers() & Qt.ShiftModifier))
+            self.clicked.emit(row)
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if event.buttons() & Qt.LeftButton:
+            self.dragged.emit(self.row_at(event.position().y()))
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.doubleClicked.emit(self.row_at(event.position().y()))
 
 
 class TextPane(_Painted):
@@ -196,11 +234,21 @@ class TextPane(_Painted):
         cols = self.text_columns() + 2
         offset = s.x - first_col * self.char_w
 
+        select_edge = self.colour("accent")
+        select = QColor(select_edge)
+        select.setAlphaF(0.16)
+        selected_lo, selected_hi = s.selection() if s.side == side else (0, 0)
+        found = self.colour("find_mark")
+
         painter.setFont(self.font())
         end = min(len(s.rows), s.first + self.visible_rows() + 1)
         for row in range(s.first, end):
             y = (row - s.first) * self.row_h
             index = s.rows[row][side]
+            if index == align.NONE and selected_lo <= row < selected_hi:
+                painter.fillRect(QRectF(0, y, self.width(), self.row_h), filler)
+                painter.fillRect(QRectF(numbers, y, self.width() - numbers, self.row_h), select)
+                continue
             kind = s.rows[row][2]
             band = QRectF(0, y, self.width(), self.row_h)
             text_band = QRectF(numbers, y, self.width() - numbers, self.row_h)
@@ -228,6 +276,18 @@ class TextPane(_Painted):
                         x1 = text_x + (min(stop, first_col + cols) - first_col) * self.char_w - offset
                         painter.fillRect(QRectF(x0, y + 1, max(2.0, x1 - x0), self.row_h - 2),
                                          colour)
+            if selected_lo <= row < selected_hi:
+                painter.fillRect(text_band, select)
+                painter.fillRect(QRectF(numbers, y, 2, self.row_h), select_edge)
+            if s.find is not None:
+                line = s.display(side, index)
+                for match in s.find.finditer(line):
+                    start, stop = match.span()
+                    if stop == start or stop <= first_col or start >= first_col + cols:
+                        continue
+                    x0 = text_x + (max(start, first_col) - first_col) * self.char_w - offset
+                    x1 = text_x + (min(stop, first_col + cols) - first_col) * self.char_w - offset
+                    painter.fillRect(QRectF(x0, y + 1, x1 - x0, self.row_h - 2), found)
             painter.setPen(dim if kind != align.EQUAL else muted)
             painter.drawText(QRectF(0, y, numbers - self.char_w, self.row_h),
                              Qt.AlignRight | Qt.AlignVCenter, str(index + 1))
@@ -262,23 +322,59 @@ class TextPane(_Painted):
         painter.drawLine(0, bottom - 1, self.width(), bottom - 1)
 
 
+def _triangle(x_tip: float, x_base: float, y: float, half: float) -> QPolygonF:
+    return QPolygonF([QPointF(x_tip, y), QPointF(x_base, y - half), QPointF(x_base, y + half)])
+
+
 def _bar_name(kind: int) -> str:
     return {align.CHANGED: "diff_chg_bar", align.DELETED: "diff_del_bar",
             align.INSERTED: "diff_add_bar", align.IGNORED: "diff_ignored_bar"}[kind]
 
 
 class Gutter(_Painted):
-    """Between the panes: which rows differ, and the current difference.
+    """Between the panes: which rows differ, and the arrows that copy across.
 
-    Later versions put the copy-left and copy-right arrows here; it is the
-    width it is so that they fit without the panes moving.
+    Each difference on screen has a strip in its colour down the middle and,
+    at its top, an arrow toward each side that can be edited: the left arrow
+    copies the right side's lines over the left's, and the other way round.
+    The same as Alt+Left and Alt+Right on the current difference.
     """
 
     WIDTH = 30
+    #: (block index, side to copy to)
+    copyRequested = Signal(int, int)
 
     def __init__(self, state: ViewState, parent: QWidget | None = None) -> None:
         super().__init__(state, parent)
         self.setFixedWidth(self.WIDTH)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def _arrow_at(self, x: float, y: float) -> tuple[int, int] | None:
+        row = self.row_at(y)
+        for index, block in enumerate(self.state.blocks):
+            if block.start == row and block.significant:
+                to_side = 0 if x < self.width() / 2 else 1
+                if self.state.editable[to_side]:
+                    return index, to_side
+        return None
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            hit = self._arrow_at(event.position().x(), event.position().y())
+            if hit is not None:
+                self.copyRequested.emit(*hit)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        hit = self._arrow_at(event.position().x(), event.position().y())
+        if hit is None:
+            self.setToolTip("")
+        else:
+            self.setToolTip("Copy to the left (Alt+Left)" if hit[1] == 0
+                            else "Copy to the right (Alt+Right)")
 
     def paintEvent(self, event) -> None:  # noqa: N802
         s = self.state
@@ -300,10 +396,24 @@ class Gutter(_Painted):
                 painter.setPen(QPen(self.colour("accent"), 1.5))
                 painter.drawLine(2, int(top), 2, int(bottom))
                 painter.drawLine(self.width() - 3, int(top), self.width() - 3, int(bottom))
+            if block.significant and s.first <= block.start < end:
+                self._arrows(painter, top, current)
         painter.setPen(QPen(self.colour("line_soft"), 1))
         painter.drawLine(0, 0, 0, self.height())
         painter.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
         painter.end()
+
+    def _arrows(self, painter: QPainter, top: float, current: bool) -> None:
+        y = top + self.row_h / 2
+        colour = self.colour("txt_0" if current else "txt_1")
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(colour)
+        half = min(5.0, self.row_h / 3)
+        if self.state.editable[0]:
+            painter.drawPolygon(_triangle(4, 11, y, half))
+        if self.state.editable[1]:
+            painter.drawPolygon(_triangle(self.width() - 4, self.width() - 11, y, half))
+        painter.setBrush(Qt.NoBrush)
 
 
 class DiffMap(QWidget):
@@ -389,6 +499,70 @@ class DiffMap(QWidget):
         event.accept()
 
 
+class LineEditor(QPlainTextEdit):
+    """Editing a run of lines in place, over the pane that shows them.
+
+    The panes are painted, so they cannot take a caret. Instead, Enter (or a
+    double-click) opens this over the selected rows of the focused side with
+    their text in it; Ctrl+Enter or clicking away puts the text back as one
+    edit, Escape leaves the lines as they were. The block it replaces is
+    exactly the lines that were selected, so adding or removing lines inside
+    it is an ordinary edit and the diff runs again when it lands.
+    """
+
+    #: (side, first row, stop row, text)
+    committed = Signal(int, int, int, str)
+    cancelled = Signal()
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setProperty("role", "lineeditor")
+        self.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.setTabChangesFocus(False)
+        self.side = 0
+        self.rows = (0, 0)
+        self._done = True
+        self.hide()
+
+    def begin(self, side: int, rows: tuple[int, int], text: str, font: QFont) -> None:
+        self.side = side
+        self.rows = rows
+        self._done = False
+        self.setFont(font)
+        self.setTabStopDistance(QFontMetricsF(font).horizontalAdvance(" ") * TAB)
+        self.setPlainText(text)
+        cursor = self.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.setTextCursor(cursor)
+        self.show()
+        self.raise_()
+        self.setFocus(Qt.OtherFocusReason)
+
+    def finish(self, keep: bool) -> None:
+        if self._done:
+            return
+        self._done = True
+        self.hide()
+        if keep:
+            self.committed.emit(self.side, self.rows[0], self.rows[1], self.toPlainText())
+        else:
+            self.cancelled.emit()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key_Escape:
+            self.finish(False)
+            return
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and event.modifiers() & Qt.ControlModifier:
+            self.finish(True)
+            return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        super().focusOutEvent(event)
+        if event.reason() != Qt.PopupFocusReason:
+            self.finish(True)
+
+
 class DiffView(QWidget):
     """The four painted widgets and the keys that move them.
 
@@ -399,6 +573,10 @@ class DiffView(QWidget):
 
     currentChanged = Signal()
     command = Signal(str)
+    #: (block index, side to copy to), from the gutter's arrows.
+    copyBlock = Signal(int, int)
+    #: (side, first row, stop row, new text), from the line editor.
+    edited = Signal(int, int, int, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -410,7 +588,10 @@ class DiffView(QWidget):
         self.hbar = QScrollBar(Qt.Horizontal)
         self.hbar.setFocusPolicy(Qt.NoFocus)
         self.hbar.valueChanged.connect(self._set_x)
-        self.focused_side = 0
+        self.editor = LineEditor(self)
+        self.editor.committed.connect(self._editor_done)
+        self.editor.cancelled.connect(lambda: self.setFocus(Qt.OtherFocusReason))
+        self._font = QFont()
 
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
@@ -428,16 +609,24 @@ class DiffView(QWidget):
         for pane in (self.left, self.right, self.gutter):
             pane.wheeled.connect(self.scroll_by)
             pane.clicked.connect(self._clicked)
-        self.left.clicked.connect(lambda _r: self._focus_side(0))
-        self.right.clicked.connect(lambda _r: self._focus_side(1))
+        for side, pane in enumerate((self.left, self.right)):
+            pane.pressed.connect(lambda row, extend, sd=side: self._press(sd, row, extend))
+            pane.dragged.connect(lambda row, sd=side: self._press(sd, row, True))
+            pane.doubleClicked.connect(lambda row, sd=side: self._double(sd, row))
+        self.gutter.copyRequested.connect(self.copyBlock)
         self.map.moved.connect(self._centre_on)
         self.map.wheeled.connect(self.scroll_by)
         self.setFocusPolicy(Qt.StrongFocus)
 
     # -------------------------------------------------------------- content
 
+    @property
+    def focused_side(self) -> int:
+        return self.state.side
+
     def apply_tokens(self, tokens: dict[str, str]) -> None:
         font = mono_font(tokens)
+        self._font = font
         for widget in (self.left, self.right, self.gutter):
             widget.apply_tokens(tokens, font)
         self.map.apply_tokens(tokens)
@@ -446,6 +635,9 @@ class DiffView(QWidget):
     def set_comparison(self, comparison: align.Comparison, left: list[str],
                        right: list[str], mode: str) -> None:
         keep = self.state.first if self.state.rows else 0
+        keep_current = self.state.current if self.state.rows else None
+        had = bool(self.state.rows)
+        self.editor.finish(True) if not self.editor.isHidden() else None
         self.state.rows = comparison.rows
         self.state.blocks = comparison.blocks
         self.state.lines = (left, right)
@@ -453,12 +645,29 @@ class DiffView(QWidget):
         self.state.marks = {}
         self.state.current = None
         self.state.first = 0
+        last = max(0, len(comparison.rows) - 1)
+        self.state.cursor = min(self.state.cursor, last)
+        self.state.anchor = min(self.state.anchor, last)
         self._layout_changed()
         self.scroll_to(min(keep, self._max_first()))
-        if keep == 0 and comparison.differences:
+        if not had and comparison.differences:
             self.go(self._index_of_nth_difference(0))
         else:
+            # After an edit: stay where the eye is. The difference that was
+            # current is the one at the cursor now, if there still is one.
+            at = comparison.block_at(self.state.cursor)
+            self.state.current = at if at is not None else (
+                keep_current if keep_current is not None
+                and keep_current < len(comparison.blocks) else None)
             self._sync_current()
+        self.update_all()
+
+    def set_editable(self, left: bool, right: bool) -> None:
+        self.state.editable = (left, right)
+        self.gutter.update()
+
+    def set_find(self, pattern: re.Pattern | None) -> None:
+        self.state.find = pattern
         self.update_all()
 
     def set_mode(self, mode: str) -> None:
@@ -473,6 +682,8 @@ class DiffView(QWidget):
 
     def scroll_to(self, first: int) -> None:
         first = max(0, min(first, self._max_first()))
+        if first != self.state.first and not self.editor.isHidden():
+            self.editor.finish(True)
         if first != self.state.first:
             self.state.first = first
             self.update_all()
@@ -494,6 +705,7 @@ class DiffView(QWidget):
             return
         self.state.current = block_index
         block = self.state.blocks[block_index]
+        self.state.cursor = self.state.anchor = block.start
         visible = self.left.visible_rows()
         if block.start < self.state.first or block.end > self.state.first + visible:
             self.scroll_to(block.start - int(visible * LANDING))
@@ -551,9 +763,94 @@ class DiffView(QWidget):
         self.setFocus(Qt.MouseFocusReason)
 
     def _focus_side(self, side: int) -> None:
-        if side != self.focused_side:
-            self.focused_side = side
+        if side != self.state.side:
+            self.state.side = side
+            self.update_all()
             self.currentChanged.emit()
+
+    # ------------------------------------------------------------ selection
+
+    def _press(self, side: int, row: int, extend: bool) -> None:
+        if not self.state.rows:
+            return
+        row = max(0, min(row, len(self.state.rows) - 1))
+        if side != self.state.side:
+            self.state.side = side
+            extend = False
+            self.currentChanged.emit()
+        self.state.cursor = row
+        if not extend:
+            self.state.anchor = row
+        self.update_all()
+
+    def _double(self, side: int, row: int) -> None:
+        self._press(side, row, False)
+        self.command.emit("edit")
+
+    def move_cursor(self, rows: int, extend: bool) -> None:
+        s = self.state
+        if not s.rows:
+            return
+        s.cursor = max(0, min(len(s.rows) - 1, s.cursor + rows))
+        if not extend:
+            s.anchor = s.cursor
+        self.reveal(s.cursor)
+        at = align.Comparison(blocks=s.blocks).block_at(s.cursor)
+        if at is not None and at != s.current:
+            s.current = at
+            self.currentChanged.emit()
+        self.update_all()
+
+    def select_rows(self, side: int, first: int, stop: int) -> None:
+        self.state.side = side
+        self.state.anchor = first
+        self.state.cursor = max(first, stop - 1)
+        self.reveal(first)
+        self.update_all()
+        self.currentChanged.emit()
+
+    def reveal(self, row: int) -> None:
+        visible = self.left.visible_rows()
+        if row < self.state.first:
+            self.scroll_to(row)
+        elif row >= self.state.first + visible - 1:
+            self.scroll_to(row - visible + 2)
+
+    def selected_lines(self, side: int | None = None) -> tuple[int, list[int]]:
+        """The focused side and the line numbers in the selection."""
+        side = self.state.side if side is None else side
+        lo, hi = self.state.selection()
+        rows = self.state.rows[lo:hi]
+        return side, [r[side] for r in rows if r[side] != align.NONE]
+
+    def selected_text(self) -> str:
+        side, lines = self.selected_lines()
+        return "\n".join(self.state.lines[side][i] for i in lines)
+
+    # -------------------------------------------------------------- editing
+
+    def begin_edit(self) -> bool:
+        """Open the line editor over the selection on the focused side."""
+        s = self.state
+        if not s.rows or not s.editable[s.side]:
+            return False
+        lo, hi = s.selection()
+        side, lines = self.selected_lines()
+        text = "\n".join(s.lines[side][i] for i in lines)
+        pane = self.left if side == 0 else self.right
+        numbers = pane.number_width()
+        self.reveal(lo)
+        top = pane.y() + (lo - s.first) * pane.row_h
+        height = (max(1, hi - lo) + 1) * pane.row_h + 6
+        height = min(height, pane.height() - max(0, top - pane.y()))
+        self.editor.setGeometry(int(pane.x() + numbers), int(top),
+                                int(pane.width() - numbers), int(max(height, pane.row_h * 2)))
+        self.editor.begin(side, (lo, hi), text, self._font)
+        return True
+
+    def _editor_done(self, side: int, lo: int, hi: int, text: str) -> None:
+        self.setFocus(Qt.OtherFocusReason)
+        self.edited.emit(side, lo, hi, text)
 
     def _sync_current(self) -> None:
         if self.state.current is not None and self.state.current >= len(self.state.blocks):
@@ -589,11 +886,47 @@ class DiffView(QWidget):
 
     # ----------------------------------------------------------------- keys
 
+    #: Keys that belong to the tab, not the view: (modifiers, key) -> command.
+    COMMANDS = {
+        (Qt.ControlModifier, Qt.Key_U): "swap",
+        (Qt.ControlModifier, Qt.Key_R): "reload",
+        (Qt.ControlModifier, Qt.Key_I): "rules",
+        (Qt.AltModifier, Qt.Key_Right): "copy-right",
+        (Qt.AltModifier, Qt.Key_Left): "copy-left",
+        (Qt.ControlModifier | Qt.AltModifier, Qt.Key_Right): "copy-all-right",
+        (Qt.ControlModifier | Qt.AltModifier, Qt.Key_Left): "copy-all-left",
+        (Qt.ControlModifier, Qt.Key_Z): "undo",
+        (Qt.ControlModifier, Qt.Key_Y): "redo",
+        (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_Z): "redo",
+        (Qt.ControlModifier, Qt.Key_S): "save",
+        (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_S): "save-all",
+        (Qt.ControlModifier, Qt.Key_F): "find",
+        (Qt.ControlModifier, Qt.Key_G): "find-next",
+        (Qt.NoModifier, Qt.Key_F3): "find-next",
+        (Qt.ShiftModifier, Qt.Key_F3): "find-previous",
+        (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_G): "find-previous",
+        (Qt.ControlModifier, Qt.Key_C): "copy-text",
+        (Qt.ControlModifier, Qt.Key_Insert): "copy-text",
+        (Qt.ControlModifier, Qt.Key_A): "select-all",
+        (Qt.NoModifier, Qt.Key_Delete): "delete-lines",
+        (Qt.NoModifier, Qt.Key_Return): "edit",
+        (Qt.NoModifier, Qt.Key_Enter): "edit",
+        (Qt.NoModifier, Qt.Key_F2): "edit",
+        (Qt.ShiftModifier, Qt.Key_Return): "insert-line",
+        (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_I): "inline",
+        (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_H): "report",
+    }
+
     def keyPressEvent(self, event) -> None:  # noqa: N802
         key = event.key()
         mods = event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier)
+        shift = bool(mods & Qt.ShiftModifier)
+        plain = mods & ~Qt.ShiftModifier
         page = max(1, self.left.visible_rows() - 1)
-        if mods == Qt.AltModifier and key == Qt.Key_Down:
+        command = self.COMMANDS.get((mods, key))
+        if command is not None:
+            self.command.emit(command)
+        elif mods == Qt.AltModifier and key == Qt.Key_Down:
             self.next_difference()
         elif mods == Qt.AltModifier and key == Qt.Key_Up:
             self.previous_difference()
@@ -601,30 +934,30 @@ class DiffView(QWidget):
             self.first_difference()
         elif mods == Qt.NoModifier and key == Qt.Key_End:
             self.last_difference()
-        elif mods == Qt.ControlModifier and key == Qt.Key_Home:
-            self.scroll_to(0)
-        elif mods == Qt.ControlModifier and key == Qt.Key_End:
-            self.scroll_to(self._max_first())
-        elif mods == Qt.NoModifier and key == Qt.Key_Down:
+        elif plain == Qt.ControlModifier and key == Qt.Key_Home:
+            self.move_cursor(-len(self.state.rows), shift)
+        elif plain == Qt.ControlModifier and key == Qt.Key_End:
+            self.move_cursor(len(self.state.rows), shift)
+        elif plain == Qt.NoModifier and key == Qt.Key_Down:
+            self.move_cursor(1, shift)
+        elif plain == Qt.NoModifier and key == Qt.Key_Up:
+            self.move_cursor(-1, shift)
+        elif plain == Qt.ControlModifier and key == Qt.Key_Down:
             self.scroll_by(1)
-        elif mods == Qt.NoModifier and key == Qt.Key_Up:
+        elif plain == Qt.ControlModifier and key == Qt.Key_Up:
             self.scroll_by(-1)
-        elif key == Qt.Key_PageDown:
+        elif plain == Qt.NoModifier and key == Qt.Key_PageDown:
             self.scroll_by(page)
-        elif key == Qt.Key_PageUp:
+            self.move_cursor(page, shift)
+        elif plain == Qt.NoModifier and key == Qt.Key_PageUp:
             self.scroll_by(-page)
+            self.move_cursor(-page, shift)
         elif mods == Qt.NoModifier and key == Qt.Key_Right:
             self.hbar.setValue(self.hbar.value() + 4)
         elif mods == Qt.NoModifier and key == Qt.Key_Left:
             self.hbar.setValue(self.hbar.value() - 4)
         elif mods == Qt.NoModifier and key == Qt.Key_Tab:
-            self._focus_side(1 - self.focused_side)
-        elif mods == Qt.ControlModifier and key == Qt.Key_U:
-            self.command.emit("swap")
-        elif mods == Qt.ControlModifier and key == Qt.Key_R:
-            self.command.emit("reload")
-        elif mods == Qt.ControlModifier and key == Qt.Key_I:
-            self.command.emit("rules")
+            self._focus_side(1 - self.state.side)
         else:
             super().keyPressEvent(event)
             return

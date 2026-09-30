@@ -68,5 +68,8 @@ def build(tokens: dict[str, str]) -> dict[str, str]:
     out["diff_ignored_mark"] = qss.mix(muted, surface, 0.22)
     # The row opposite a line that exists on one side only. Darker than the
     # pane, so it reads as a gap rather than as an empty line in the file.
+    # Find matches: the selection hue, which is the family's "this is what you
+    # asked for" colour, strong enough to read through a change wash.
+    out["find_mark"] = qss.mix(qss.unhex(tokens["sel"]), surface, 0.42)
     out["diff_filler"] = qss.mix(qss.unhex(tokens["bg_0"]), surface, 0.55)
     return out

@@ -274,9 +274,33 @@ QWidget[role="sidehead"] {{
 QWidget[role="sidehead"][focus="true"] {{ border-bottom: 1px solid {accent_line}; }}
 QLabel[role="sidename"] {{ font-weight: 600; color: {txt_0}; }}
 QLabel[role="sidewhere"] {{ color: {txt_2}; }}
-QLabel[role="sidefacts"] {{ color: {txt_2}; font-family: {mono}; font-size: 11px; }}
+QToolButton[role="sidefacts"] {{
+    background: transparent;
+    border: 1px solid transparent;
+    color: {txt_2};
+    font-family: {mono};
+    font-size: 11px;
+    padding: 1px 6px;
+    min-height: 18px;
+}}
+QToolButton[role="sidefacts"]:hover {{ background: {bg_3}; border: 1px solid {line}; color: {txt_1}; }}
 QLabel[role="sidestate"] {{ color: {txt_1}; }}
 QLabel[role="sidestate"][state="bad"] {{ color: {warn}; }}
+QLabel[role="sidestate"][state="dirty"] {{ color: {accent_text}; font-weight: 600; }}
+
+/* Find: a strip over the card, only while it is open. */
+QWidget[role="findbar"] {{ background: transparent; }}
+QLineEdit[role="findfield"] {{ font-family: {mono}; padding: 3px 8px; }}
+
+/* Editing lines in place: the same surface as the pane, outlined in the
+   accent so it is plainly not part of the file until it is committed. */
+QPlainTextEdit[role="lineeditor"] {{
+    background: {bg_2};
+    color: {txt_0};
+    border: 1px solid {accent_line};
+    border-radius: {radius_sm};
+    padding: 0px;
+}}
 QToolButton[role="retry"] {{
     background: transparent;
     border: 1px solid {line};

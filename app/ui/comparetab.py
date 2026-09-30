@@ -7,18 +7,29 @@ comparison found all arrive through `Session.changed`.
 When the two sides are not two text files -- still loading, one missing, two
 folders, a binary pair -- the view is swapped for a message that says so in
 words. A blank pane is never an answer.
+
+Editing arrives here as commands from the view (keys, the gutter's arrows,
+the line editor) and leaves as calls on the session, which owns the text.
+The tab's part is translating rows into lines, asking before anything is
+lost -- a reload over edits, an overwrite of a file somebody else changed --
+and saying why when an edit is not possible.
 """
 
 from __future__ import annotations
 
 import ntpath
+import re
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QDir, Qt, Signal
 from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QToolButton,
@@ -27,16 +38,28 @@ from PySide6.QtWidgets import (
 )
 
 from app.core import session as core
+from app.core.diff import align
 from app.core.rules import WHITESPACE, WHITESPACE_LABELS, Rules
+from app.io.load import LABELS
 from app.io.longpath import display
 from app.ui import glyphs
 from app.ui.diffview import DiffView
+
+#: What a side can be saved as, from its menu: (label, encoding, mark).
+SAVE_ENCODINGS = (
+    ("UTF-8", "utf-8", False),
+    ("UTF-8 with BOM", "utf-8", True),
+    ("Windows-1252", "cp1252", False),
+    ("UTF-16 LE with BOM", "utf-16-le", True),
+    ("UTF-16 BE with BOM", "utf-16-be", True),
+)
 
 
 class SideHead(QWidget):
     """The strip over one side: name, folder, what was detected, and trouble."""
 
     retry = Signal()
+    menuRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -47,8 +70,11 @@ class SideHead(QWidget):
         self.where = QLabel()
         self.where.setProperty("role", "sidewhere")
         self.where.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.facts = QLabel()
+        self.facts = QToolButton()
         self.facts.setProperty("role", "sidefacts")
+        self.facts.setFocusPolicy(Qt.NoFocus)
+        self.facts.setToolTip("Encoding, line endings and saving for this side")
+        self.facts.clicked.connect(lambda _c=False: self.menuRequested.emit())
         self.state = QLabel()
         self.state.setProperty("role", "sidestate")
         self.again = QToolButton()
@@ -70,27 +96,49 @@ class SideHead(QWidget):
         box.setContentsMargins(12, 7, 12, 7)
         box.addLayout(top)
 
-    def show_side(self, side: core.Side) -> None:
+    def show_side(self, side: core.Side, *, encoding_changed: bool = False) -> None:
         path = display(side.path)
         folder, name = ntpath.split(path)
         self.name.setText(side.title or name or path or "Nothing chosen")
         self.where.setText(folder if not side.title else path)
         self.where.setToolTip(path)
         facts = side.loaded.facts if side.loaded is not None and side.state == core.READY else ""
+        if facts and side.doc is not None:
+            # What a save would write, which after an edit or a change from
+            # this menu is not what was read.
+            label = LABELS.get(side.encoding, side.encoding) + (" BOM" if side.bom else "")
+            eol = _eol_now(side.doc.endings) or side.loaded.eol
+            parts = [label + (" (on save)" if encoding_changed else "")]
+            if eol:
+                parts.append(eol)
+            count = len(side.doc.lines)
+            parts.append(f"{count:,} line{'s' if count != 1 else ''}")
+            facts = "  ·  ".join(parts)
         if side.readonly and facts:
             facts += "  ·  read-only"
         self.facts.setText(facts)
+        self.facts.setVisible(bool(facts))
         bad = side.state in (core.FAILED, core.SLOW)
+        state, tone = "", ""
+        again = ""
         if side.state == core.LOADING:
-            self.state.setText("Reading...")
+            state = "Reading..."
         elif bad:
-            self.state.setText(side.error)
-        else:
-            self.state.setText("")
-        self.state.setProperty("state", "bad" if bad else "")
+            state, tone, again = side.error, "bad", "Retry"
+        elif side.saving:
+            state = "Saving..."
+        elif side.save_error:
+            state, tone = side.save_error, "bad"
+        elif side.stale:
+            state, tone, again = "Changed on disk", "bad", "Reload"
+        elif side.dirty:
+            state, tone = "Modified", "dirty"
+        self.state.setText(state)
+        self.state.setProperty("state", tone)
         self.state.style().unpolish(self.state)
         self.state.style().polish(self.state)
-        self.again.setVisible(bad)
+        self.again.setText(again or "Retry")
+        self.again.setVisible(bool(again))
 
     def set_focused(self, focused: bool) -> None:
         value = "true" if focused else "false"
@@ -98,6 +146,100 @@ class SideHead(QWidget):
             self.setProperty("focus", value)
             self.style().unpolish(self)
             self.style().polish(self)
+
+
+def _eol_now(endings: list[str]) -> str:
+    kinds = {e for e in endings if e}
+    if not kinds:
+        return ""
+    if len(kinds) > 1:
+        return "mixed"
+    return {"\r\n": "CRLF", "\n": "LF", "\r": "CR"}[kinds.pop()]
+
+
+class FindBar(QWidget):
+    """Ctrl+F: a line of text to find in both sides, and where the matches are.
+
+    Matches are marked in both panes while the bar is open. Enter and F3 go to
+    the next one, Shift with either to the previous; Escape closes the bar and
+    takes the marks with it.
+    """
+
+    changed = Signal()
+    step = Signal(int)
+    closed = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setProperty("role", "findbar")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.field = QLineEdit()
+        self.field.setProperty("role", "findfield")
+        self.field.setPlaceholderText("Find in both sides")
+        self.field.textChanged.connect(lambda _t: self.changed.emit())
+        self.case = QPushButton("Match case")
+        self.regex = QPushButton("Regex")
+        for button in (self.case, self.regex):
+            button.setProperty("role", "segment")
+            button.setCheckable(True)
+            button.setFocusPolicy(Qt.NoFocus)
+            button.toggled.connect(lambda _c: self.changed.emit())
+        self.count = QLabel()
+        self.count.setProperty("role", "count")
+        self.previous = QToolButton()
+        self.next = QToolButton()
+        self.close_button = QToolButton()
+        for button, glyph, tip in ((self.previous, "diff_prev", "Previous match (Shift+F3)"),
+                                   (self.next, "diff_next", "Next match (F3)"),
+                                   (self.close_button, "close", "Close (Escape)")):
+            button.setProperty("role", "nav")
+            button.setProperty("glyph", glyph)
+            button.setToolTip(tip)
+            button.setFocusPolicy(Qt.NoFocus)
+        self.previous.clicked.connect(lambda _c=False: self.step.emit(-1))
+        self.next.clicked.connect(lambda _c=False: self.step.emit(1))
+        self.close_button.clicked.connect(lambda _c=False: self.closed.emit())
+        segments = QWidget()
+        segments.setProperty("role", "segments")
+        segments.setAttribute(Qt.WA_StyledBackground, True)
+        seg = QHBoxLayout(segments)
+        seg.setContentsMargins(2, 2, 2, 2)
+        seg.setSpacing(2)
+        seg.addWidget(self.case)
+        seg.addWidget(self.regex)
+        box = QHBoxLayout(self)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(4)
+        box.addWidget(self.field, 1)
+        box.addWidget(segments)
+        box.addWidget(self.previous)
+        box.addWidget(self.next)
+        box.addWidget(self.count)
+        box.addWidget(self.close_button)
+        self.hide()
+
+    def pattern(self) -> tuple[re.Pattern | None, str]:
+        """The compiled search, and a problem to show if it did not compile."""
+        text = self.field.text()
+        if not text:
+            return None, ""
+        flags = 0 if self.case.isChecked() else re.IGNORECASE
+        try:
+            return re.compile(text if self.regex.isChecked() else re.escape(text), flags), ""
+        except re.error as exc:
+            return None, f"Not a pattern: {exc}"
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        key = event.key()
+        shift = bool(event.modifiers() & Qt.ShiftModifier)
+        if key == Qt.Key_Escape:
+            self.closed.emit()
+        elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_F3):
+            self.step.emit(-1 if shift else 1)
+        else:
+            super().keyPressEvent(event)
+            return
+        event.accept()
 
 
 class Message(QWidget):
@@ -131,6 +273,8 @@ class CompareTab(QWidget):
 
     titleChanged = Signal()
     status = Signal(str)
+    #: Every save the tab asked for has finished, successfully or not.
+    savesFinished = Signal(bool)
 
     def __init__(self, session: core.Session, tokens: dict[str, str],
                  parent: QWidget | None = None) -> None:
@@ -138,18 +282,28 @@ class CompareTab(QWidget):
         self.session = session
         self._tokens = tokens
         self._shown_result = None
+        self._matches: list[tuple[int, int]] = []
+        self._pending_saves: set[int] = set()
+        self._saves_ok = True
 
         self.view = DiffView()
         self.view.currentChanged.connect(self._update_position)
         self.view.command.connect(self._command)
+        self.view.copyBlock.connect(self._copy_block)
+        self.view.edited.connect(self._edited)
+        self.find = FindBar()
+        self.find.changed.connect(self._find_changed)
+        self.find.step.connect(self._find_step)
+        self.find.closed.connect(self._find_closed)
         self.message = Message()
         self.stack = QStackedWidget()
         self.stack.addWidget(self.message)
         self.stack.addWidget(self.view)
 
         self.heads = (SideHead(), SideHead())
-        self.heads[0].retry.connect(lambda: self.session.retry(core.LEFT))
-        self.heads[1].retry.connect(lambda: self.session.retry(core.RIGHT))
+        for index, head in enumerate(self.heads):
+            head.retry.connect(lambda i=index: self._reload_side(i))
+            head.menuRequested.connect(lambda i=index: self._side_menu(i))
         heads = QHBoxLayout()
         heads.setContentsMargins(0, 0, 0, 0)
         heads.setSpacing(0)
@@ -173,9 +327,11 @@ class CompareTab(QWidget):
         outer.setContentsMargins(8, 2, 8, 0)
         outer.setSpacing(6)
         outer.addWidget(self._toolbar())
+        outer.addWidget(self.find)
         outer.addWidget(card, 1)
 
         session.changed.connect(self.refresh)
+        session.saved.connect(self._saved)
         self.apply_tokens(tokens)
         self.refresh()
 
@@ -241,6 +397,18 @@ class CompareTab(QWidget):
             seg.addWidget(button)
         box.addWidget(segments)
         box.addSpacing(8)
+        self._copy_left = self._nav("copy_left", "Copy this difference to the left (Alt+Left)",
+                                    lambda: self._command("copy-left"))
+        self._copy_right = self._nav("copy_right",
+                                     "Copy this difference to the right (Alt+Right)",
+                                     lambda: self._command("copy-right"))
+        self._undo = self._nav("undo", "Undo on this side (Ctrl+Z)", lambda: self._command("undo"))
+        self._redo = self._nav("redo", "Redo on this side (Ctrl+Y)", lambda: self._command("redo"))
+        self._save = self._nav("save", "Save this side (Ctrl+S); both with Ctrl+Shift+S",
+                               lambda: self._command("save"))
+        for button in (self._copy_left, self._copy_right, self._undo, self._redo, self._save):
+            box.addWidget(button)
+        box.addSpacing(8)
         self._swap = self._nav("swap", "Swap sides (Ctrl+U)", self.session.swap)
         self._reload = self._nav("refresh", "Compare again from disk (Ctrl+R)",
                                  self.session.reload)
@@ -290,19 +458,258 @@ class CompareTab(QWidget):
         self._sync_toggles()
 
     def _command(self, name: str) -> None:
+        s = self.session
+        side = self.view.focused_side
         if name == "swap":
-            self.session.swap()
+            s.swap()
         elif name == "reload":
-            self.session.reload()
+            self.reload()
         elif name == "rules":
-            self.session.set_rules(self.session.rules.toggled())
+            s.set_rules(s.rules.toggled())
+        elif name in ("copy-left", "copy-right"):
+            if self.view.state.current is not None:
+                self._copy_block(self.view.state.current, 0 if name == "copy-left" else 1)
+        elif name in ("copy-all-left", "copy-all-right"):
+            to_side = 0 if name == "copy-all-left" else 1
+            if self._can_edit(to_side):
+                s.copy_all(to_side)
+        elif name == "undo":
+            if not s.undo(side):
+                self.status.emit("Nothing to undo on this side")
+        elif name == "redo":
+            if not s.redo(side):
+                self.status.emit("Nothing to redo on this side")
+        elif name == "save":
+            self.save_side(side)
+        elif name == "save-all":
+            self.save_all()
+        elif name == "find":
+            self.open_find()
+        elif name == "find-next":
+            self._find_step(1)
+        elif name == "find-previous":
+            self._find_step(-1)
+        elif name == "copy-text":
+            text = self.view.selected_text()
+            QApplication.clipboard().setText(text)
+            count = len(self.view.selected_lines()[1])
+            self.status.emit(f"Copied {count} line{'s' if count != 1 else ''}")
+        elif name == "select-all":
+            if self.view.state.rows:
+                self.view.select_rows(side, 0, len(self.view.state.rows))
+        elif name == "edit":
+            if self._can_edit(side) and self._current_or_say():
+                self.view.begin_edit()
+        elif name == "delete-lines":
+            if self._can_edit(side) and self._current_or_say():
+                lo, hi = self.view.state.selection()
+                first, stop = align.side_range(s.result.rows, lo, hi, side)
+                if stop > first:
+                    s.replace_lines(side, first, stop, [])
+
+    def _can_edit(self, index: int) -> bool:
+        side = self.session.sides[index]
+        if side.editable:
+            return True
+        self.status.emit(side.why_not_editable or "This side cannot be edited")
+        return False
+
+    def _current_or_say(self) -> bool:
+        if self.session.current:
+            return True
+        self.status.emit("Still comparing after the last edit; try again in a moment")
+        return False
+
+    def _copy_block(self, block: int, to_side: int) -> None:
+        if self._can_edit(to_side) and self._current_or_say():
+            self.session.copy_block(block, to_side)
+
+    def _edited(self, side: int, lo: int, hi: int, text: str) -> None:
+        s = self.session
+        if not self._current_or_say():
+            return
+        first, stop = align.side_range(s.result.rows, lo, hi, side)
+        lines = text.split("\n") if text else []
+        if not s.replace_lines(side, first, stop, lines):
+            if not s.sides[side].editable:
+                self._can_edit(side)
+
+    # -------------------------------------------------------------- saving
+
+    def save_side(self, index: int, *, force: bool = False) -> bool:
+        side = self.session.sides[index]
+        if side.doc is None:
+            return False
+        if not side.editable:
+            if side.readonly or (side.loaded is not None and side.loaded.lossy):
+                return self.save_side_as(index)
+            return False
+        if not side.dirty and not self.session.encoding_changed(index) and not force:
+            self.status.emit("No changes to save on this side")
+            return False
+        if self.session.save(index, force=force):
+            self._pending_saves.add(index)
+            return True
+        return False
+
+    def save_side_as(self, index: int) -> bool:
+        side = self.session.sides[index]
+        if side.doc is None:
+            return False
+        path, _filter = QFileDialog.getSaveFileName(self, "Save as", side.path)
+        if not path:
+            return False
+        path = QDir.toNativeSeparators(path)
+        if self.session.save(index, path=path):
+            self._pending_saves.add(index)
+            return True
+        return False
+
+    def save_all(self) -> bool:
+        """Every side with unsaved edits. True if any save started."""
+        started = False
+        self._saves_ok = True
+        for index, side in enumerate(self.session.sides):
+            if side.dirty and side.editable:
+                started = self.save_side(index) or started
+        if not started:
+            self.status.emit("No changes to save")
+        return started
+
+    def _saved(self, index: int, result) -> None:
+        self._pending_saves.discard(index)
+        name = ntpath.basename(display(result.path))
+        if result.ok:
+            extra = f"  ·  backup {ntpath.basename(result.backup)}" if result.backup else ""
+            self.status.emit(f"Saved {name}{extra}")
+        elif result.conflict:
+            box = QMessageBox(self)
+            box.setWindowTitle("Changed on disk")
+            box.setText(f"{name} changed on disk after it was read.")
+            box.setInformativeText("Overwriting replaces what is on disk now with this side. "
+                                   "Save as keeps both.")
+            overwrite = box.addButton("Overwrite", QMessageBox.DestructiveRole)
+            elsewhere = box.addButton("Save as...", QMessageBox.AcceptRole)
+            box.addButton(QMessageBox.Cancel)
+            box.exec()
+            if box.clickedButton() is overwrite:
+                self.save_side(index, force=True)
+                return
+            if box.clickedButton() is elsewhere and self.save_side_as(index):
+                return
+            self._saves_ok = False
+        else:
+            self._saves_ok = False
+            self.status.emit(f"Not saved: {name}: {result.error}")
+        if not self._pending_saves:
+            self.savesFinished.emit(self._saves_ok)
+            self._saves_ok = True
+
+    def reload(self) -> None:
+        """Ctrl+R. Asks first when it would throw edits away."""
+        if self.session.dirty and not self._confirm_discard("Compare again from disk"):
+            return
+        self.session.reload()
+
+    def _reload_side(self, index: int) -> None:
+        side = self.session.sides[index]
+        if side.dirty and not self._confirm_discard("Reload this side"):
+            return
+        self.session.retry(index)
+
+    def _confirm_discard(self, action: str) -> bool:
+        answer = QMessageBox.question(
+            self, action, "There are unsaved changes. Reading from disk throws them away.",
+            QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Cancel)
+        return answer == QMessageBox.Discard
+
+    def _side_menu(self, index: int) -> None:
+        s = self.session
+        side = s.sides[index]
+        menu = QMenu(self)
+        save = menu.addAction("Save\tCtrl+S", lambda: self.save_side(index))
+        save.setEnabled(side.editable and (side.dirty or s.encoding_changed(index)))
+        menu.addAction("Save as...", lambda: self.save_side_as(index)).setEnabled(side.doc is not None)
+        menu.addSeparator()
+        encodings = menu.addMenu("Save with encoding")
+        for label, encoding, bom in SAVE_ENCODINGS:
+            action = encodings.addAction(label)
+            action.setCheckable(True)
+            action.setChecked((side.encoding, side.bom) == (encoding, bom)
+                              or (side.encoding == "ascii" and encoding == "utf-8" and not bom
+                                  and not side.bom))
+            action.triggered.connect(lambda _c=False, e=encoding, b=bom: s.set_encoding(index, e, b))
+        encodings.setEnabled(side.doc is not None)
+        endings = menu.addMenu("Convert line endings")
+        for eol in ("CRLF", "LF", "CR"):
+            endings.addAction(eol, lambda e=eol: s.set_line_endings(index, e))
+        endings.setEnabled(side.editable)
+        menu.addSeparator()
+        menu.addAction("Copy path", lambda: QApplication.clipboard().setText(display(side.path)))
+        menu.addAction("Reload from disk", lambda: self._reload_side(index))
+        head = self.heads[index]
+        menu.aboutToHide.connect(menu.deleteLater)
+        menu.popup(head.facts.mapToGlobal(head.facts.rect().bottomLeft()))
+
+    # ----------------------------------------------------------------- find
+
+    def open_find(self) -> None:
+        self.find.show()
+        selected = self.view.selected_text()
+        if selected and "\n" not in selected and len(selected) < 80 and not self.find.field.text():
+            self.find.field.setText(selected.strip())
+        self.find.field.setFocus(Qt.ShortcutFocusReason)
+        self.find.field.selectAll()
+        self._find_changed()
+
+    def _find_changed(self) -> None:
+        pattern, problem = self.find.pattern() if self.find.isVisible() else (None, "")
+        self.view.set_find(pattern)
+        self._matches = []
+        if pattern is not None:
+            left, right = self.session.result_lines if self.session.result else ([], [])
+            lines = (left, right)
+            for row, entry in enumerate(self.view.state.rows):
+                for side in (0, 1):
+                    index = entry[side]
+                    if index != align.NONE and pattern.search(lines[side][index]):
+                        self._matches.append((row, side))
+        if problem:
+            self.find.count.setText(problem)
+        elif pattern is None:
+            self.find.count.setText("")
+        else:
+            self.find.count.setText(f"{len(self._matches):,} match"
+                                    f"{'es' if len(self._matches) != 1 else ''}")
+
+    def _find_step(self, direction: int) -> None:
+        if not self.find.isVisible():
+            self.open_find()
+            return
+        if not self._matches:
+            return
+        here = (self.view.state.cursor, self.view.state.side)
+        if direction > 0:
+            target = next((m for m in self._matches if m > here), self._matches[0])
+        else:
+            target = next((m for m in reversed(self._matches) if m < here), self._matches[-1])
+        row, side = target
+        self.view.select_rows(side, row, row + 1)
+        number = self._matches.index(target) + 1
+        self.find.count.setText(f"{number:,} of {len(self._matches):,}")
+
+    def _find_closed(self) -> None:
+        self.find.hide()
+        self.view.set_find(None)
+        self._matches = []
+        self.focus_view()
 
     # --------------------------------------------------------------- theme
 
     def apply_tokens(self, tokens: dict[str, str]) -> None:
         self._tokens = tokens
         ratio = float(self.devicePixelRatioF() or 1.0)
-        for button in self._navs:
+        for button in self._navs + [self.find.previous, self.find.next, self.find.close_button]:
             button.setIcon(glyphs.icon(button.property("glyph"), colour=tokens["txt_1"],
                                        muted=tokens["txt_2"], size=16, ratio=ratio))
         self.view.apply_tokens(tokens)
@@ -315,25 +722,28 @@ class CompareTab(QWidget):
         titles = [side.title for side in self.session.sides]
         if any(titles):
             names = [t or n for t, n in zip(titles, names)]
+        mark = "* " if self.session.dirty else ""
         if names[0].lower() == names[1].lower():
-            return names[0]
-        return f"{names[0]}  vs  {names[1]}"
+            return mark + names[0]
+        return f"{mark}{names[0]}  vs  {names[1]}"
 
     def tooltip(self) -> str:
         return "\n".join(display(side.path) for side in self.session.sides)
 
     def refresh(self) -> None:
         s = self.session
-        for head, side in zip(self.heads, s.sides):
-            head.show_side(side)
+        for index, (head, side) in enumerate(zip(self.heads, s.sides)):
+            head.show_side(side, encoding_changed=s.encoding_changed(index))
         self._sync_toggles()
+        self.view.set_editable(s.sides[0].editable, s.sides[1].editable)
         kind = s.kind
         if kind == core.TEXT and s.result is not None:
             if s.result is not self._shown_result:
                 self._shown_result = s.result
-                left, right = s.sides
-                self.view.set_comparison(s.result, left.lines, right.lines,
-                                         s.options.intraline)
+                left, right = s.result_lines
+                self.view.set_comparison(s.result, left, right, s.options.intraline)
+                if self.find.isVisible():
+                    self._find_changed()
             self.stack.setCurrentWidget(self.view)
         else:
             self._shown_result = None
@@ -390,6 +800,14 @@ class CompareTab(QWidget):
         has = bool(result and result.differences)
         for button in (self._first, self._prev, self._next, self._last):
             button.setEnabled(has)
+        side = s.sides[self.view.focused_side]
+        on_block = has and self.view.state.current is not None
+        self._copy_left.setEnabled(on_block and s.sides[0].editable)
+        self._copy_right.setEnabled(on_block and s.sides[1].editable)
+        self._undo.setEnabled(side.doc is not None and side.doc.can_undo)
+        self._redo.setEnabled(side.doc is not None and side.doc.can_redo)
+        self._save.setEnabled(side.editable and (side.dirty or s.encoding_changed(
+            self.view.focused_side)))
         state = ""
         if result is None:
             text = ""

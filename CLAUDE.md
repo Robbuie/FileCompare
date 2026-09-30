@@ -133,7 +133,9 @@ Holds what the UI renders.
   diff (L5X, XML, JSON, CSV). Each one is optional and says what it ignored.
   (Not yet written.)
 - `core/session.py` -- one open comparison: its sides, its deadlines, its
-  result. Edits, undo and dirty state arrive with step 4.
+  result, its edits and saves.
+- `core/document.py` -- one side's text while it is edited: lines, their
+  endings, and undo/redo as splices. Pure; the tests prove it alone.
 - `core/loader.py` -- runs work off the UI thread and hands the answer back
   on it, always as a queued event (see "Things that will bite you").
 - `core/instance.py` -- the single-instance socket.
@@ -145,8 +147,10 @@ Holds what the UI renders.
   the decoded lines, the endings, a hash of the bytes and what was detected.
 - `io/kind.py` -- file, folder or missing, for a path from the command line.
 - `io/longpath.py` -- the `\\?\` rule, ported from File Manager's `paths.py`.
-- Later: `io/walk.py` (folder compare), `io/save.py` (write beside, then
-  rename), and `io/worker.py` / `io/pool.py` ported from File Manager.
+- `io/save.py` -- encode with the side's encoding, mark and per-line
+  endings, write beside, check the file did not move, rename.
+- Later: `io/walk.py` (folder compare), and `io/worker.py` / `io/pool.py`
+  ported from File Manager.
 
 ### The row model
 
@@ -456,13 +460,29 @@ made in a worker, not in the argument parser.
   `cli.resolve` uses `ntpath` for anything Windows-shaped and leaves a POSIX
   path alone off Windows; without that, every path in the tests had its
   slashes turned round and was "Not found".
+- **The view draws the lines the result was computed from, never the live
+  documents.** `Session.result_lines` is the snapshot a comparison ran on.
+  After an edit to a large file the new diff runs on the loader, and until it
+  answers the documents are ahead of the rows; a view reading the live lines
+  would index past the end of a list. For the same reason a block copy or an
+  edit is refused (with a status message) while `Session.current` is False.
+  Small files (`SYNC_LINES`) are compared on the spot, so that window is
+  normally never seen.
+- **A file without a final newline keeps not having one.** `Document.replace`
+  carries the last line's ending to whichever line is last after the edit,
+  and widens the splice by a line when it must change the line before it, so
+  undo restores that too. `test_edit.py` has the cases.
+- **A save must never outlive its check.** The file's size and time are
+  compared with what was read immediately before the rename, after the new
+  bytes are on disk, not before writing them: a save to a share takes long
+  enough for somebody else's save to land in between.
 - **A file can change under an open tab.** Poll the two files on an interval
   (not a watcher; SMB change notification is unreliable) and offer a reload
   when one changes. Never reload over unsaved edits without asking.
 
 ## Build order
 
-0. Done so far (0.1.0): steps 1 to 3 below, less find, and less editing.
+0. Done so far: steps 1 to 4 (0.2.0 added editing, saving and find).
    The window, title bar, tabs, start page, the command line and the
    single-instance hand-over; the engine with whitespace, case, blank-line
    and pattern rules; the reader; the side-by-side view with the gutter, the

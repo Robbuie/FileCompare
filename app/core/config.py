@@ -51,6 +51,9 @@ DEFAULTS: dict[str, Any] = {
     # Megabytes past which a file is not read as text.
     "load.max_mb": 512,
 
+    # Keep `name.ext.orig` beside a file the first time it is saved.
+    "save.backup": False,
+
     # The last folder each side of the start page browsed from.
     "start.left_folder": "",
     "start.right_folder": "",

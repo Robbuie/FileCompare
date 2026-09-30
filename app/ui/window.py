@@ -46,9 +46,19 @@ KEYS = """\
 Alt+Down / Alt+Up         next, previous difference
 Home / End                first, last difference
 Ctrl+Home / Ctrl+End      top, bottom of the file
-Up, Down, PgUp, PgDn      scroll
+Up, Down, PgUp, PgDn      move; with Shift, select lines
+Ctrl+Up / Ctrl+Down       scroll without moving
 Left / Right              scroll sideways
 Tab                       the other side
+Alt+Right / Alt+Left      copy this difference right, left
+Ctrl+Alt+Right / Left     copy everything right, left
+Enter, F2, double-click   edit the selected lines (Ctrl+Enter keeps, Esc drops)
+Delete                    delete the selected lines
+Ctrl+Z / Ctrl+Y           undo, redo on this side
+Ctrl+S / Ctrl+Shift+S     save this side, save both
+Ctrl+C                    copy the selected lines
+Ctrl+A                    select every line
+Ctrl+F                    find; F3 / Shift+F3 next, previous
 Ctrl+U                    swap sides
 Ctrl+R                    compare again from disk
 Ctrl+I                    rules off and on
@@ -195,6 +205,10 @@ class MainWindow(QMainWindow):
         page = page or self.pages.currentWidget()
         if page is None:
             return
+        if not self._may_close([page]):
+            return
+        if isinstance(page, CompareTab):
+            page.session.stop()
         # The page leaves the stack before its tab leaves the strip: removing
         # the tab moves the current index, and `_tab_changed` reads the stack.
         index = self._index_of(page)
@@ -236,6 +250,7 @@ class MainWindow(QMainWindow):
             intraline=self._config.get("compare.intraline"),
             timeout=float(self._config.get("load.timeout")),
             max_bytes=int(float(self._config.get("load.max_mb")) * 1024 * 1024),
+            backup=bool(self._config.get("save.backup")),
         )
         session = Session(self._loader, left, right, options=options, titles=titles,
                           readonly=readonly)
@@ -463,7 +478,44 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def _may_close(self, pages: list[QWidget]) -> bool:
+        """Ask about unsaved edits in `pages`. True when closing can go on:
+        nothing was unsaved, it was saved, or it was deliberately discarded."""
+        from PySide6.QtCore import QEventLoop, QTimer
+
+        dirty = [p for p in pages if isinstance(p, CompareTab) and p.session.dirty]
+        for page in dirty:
+            self.tabs.setCurrentIndex(self._index_of(page))
+            box = QMessageBox(self)
+            box.setWindowTitle("Unsaved changes")
+            box.setText(f"{page.title().lstrip('* ')} has unsaved changes.")
+            box.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+            box.setDefaultButton(QMessageBox.Save)
+            answer = box.exec()
+            if answer == QMessageBox.Cancel:
+                return False
+            if answer == QMessageBox.Save:
+                if not page.save_all():
+                    return False
+                loop = QEventLoop()
+                outcome = {"ok": False}
+
+                def finished(ok: bool, loop=loop) -> None:
+                    outcome["ok"] = ok
+                    loop.quit()
+
+                page.savesFinished.connect(finished)
+                QTimer.singleShot(120_000, loop.quit)
+                loop.exec()
+                page.savesFinished.disconnect(finished)
+                if not outcome["ok"] or page.session.dirty:
+                    return False
+        return True
+
     def closeEvent(self, event) -> None:  # noqa: N802
+        if not self._may_close(self._pages()):
+            event.ignore()
+            return
         self._config.set("window.maximized", self.isMaximized())
         if not self.isMaximized():
             self._config.set("window.width", self.width())
