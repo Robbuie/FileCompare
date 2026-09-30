@@ -36,13 +36,22 @@ python -m app                        # the start page
 python -m app left.txt right.txt     # compare two files
 ```
 
+## Installing
+
+Download `FileCompare-Setup-<version>.exe` from the latest release and run it.
+It installs per user (no administrator prompt) into
+`%LOCALAPPDATA%\Programs\FileCompare`, puts that folder on your PATH,
+registers `FileCompare.exe` under App Paths, and checks for updates a few
+seconds after launch (turn that off from the menu). An optional installer
+task adds "Select left side to compare" and "Compare to left side" to
+Explorer's right-click menu.
+
 ## From File Manager
 
-File Manager's compare commands (Ctrl+F2 for the two panes, Alt+F2 for the
-marked files) run whichever compare tool is installed and pass it two paths.
-Until this has an installer that registers it, point those rows at it by hand
-in File Manager's command editor: program `pythonw`, arguments
-`-m app %C`, working folder this repository.
+File Manager 0.41 and later start File Compare from its compare commands:
+Ctrl+F2 compares the two panes, Alt+F2 the marked files. Beyond Compare and
+then WinMerge are used on a machine without File Compare. Pressing the key
+again while File Compare is open adds a tab to the window already open.
 
 ## With git
 
@@ -50,10 +59,13 @@ in File Manager's command editor: program `pythonw`, arguments
 [diff]
     tool = filecompare
 [difftool "filecompare"]
-    cmd = pythonw -m app \"$LOCAL\" \"$REMOTE\"
+    cmd = FileCompare.exe \"$LOCAL\" \"$REMOTE\" --readonly left
+[merge]
+    tool = filecompare
+[mergetool "filecompare"]
+    cmd = FileCompare.exe --merge \"$LOCAL\" \"$REMOTE\" \"$BASE\" -o \"$MERGED\"
+    trustExitCode = true
 ```
-
-(Run from this folder until the installer puts `FileCompare.exe` on the path.)
 
 ## Tests
 

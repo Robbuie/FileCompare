@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0 - installer, updates, File Manager
+
+From here File Compare is installed rather than run from a checkout, and
+File Manager's compare keys open it.
+
+- **Installer** (`FileCompare-Setup-<version>.exe`): per user, no
+  administrator prompt, into `%LOCALAPPDATA%\Programs\FileCompare`. It
+  registers `FileCompare.exe` under App Paths and puts its folder on your
+  PATH, so File Manager, git and a terminal all find it by name.
+- **Updates**: a few seconds after launch File Compare looks for a newer
+  release on GitHub (the only network call it makes) and offers it. It
+  downloads in the background, is checked against its size and SHA-256, and
+  installs when you quit. The menu can check now, or stop checking on launch.
+- **File Manager** 0.41 starts File Compare from Ctrl+F2 and Alt+F2, with
+  Beyond Compare and WinMerge as the fallbacks.
+- **Explorer**, optionally: "Select left side to compare" on a file or
+  folder, then "Compare to left side" on another. No shell extension; two
+  ordinary per-user menu entries.
+- The icon: two panes with their rows lined up and one difference drawn
+  across both in Drafting blue.
+- The menu can turn on keeping a `.orig` copy of a file on its first save.
+
 ## 0.2.0 - editing and saving
 
 Both sides can be changed and saved, without a byte changing that nobody

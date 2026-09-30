@@ -387,8 +387,12 @@ made in a worker, not in the argument parser.
   as a new tab. Pressing Ctrl+F2 five times in File Manager gives one window
   with five tabs.
 - **Found by name.** The installer registers `FileCompare.exe` under
-  `HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths`, which is how
-  File Manager's command rows find a program without a hardcoded path.
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths` *and* puts
+  the install folder on the user's PATH. App Paths alone is not enough:
+  File Manager's `worker.locate` uses `shutil.which`, which reads PATH and
+  never App Paths, and so does git. (A `KNOWN_PROGRAMS` entry in File
+  Manager's `io/worker.py` would also do; it was written once and lost to a
+  concurrent edit, and PATH makes it unnecessary.)
 - **File Manager's side of it** (a commit in that repo): the `compare` and
   `compare-files` rows gain `FileCompare.exe` as their program, with
   `BCompare.exe` and `WinMergeU.exe` kept as alternatives, so a machine without
@@ -482,7 +486,9 @@ made in a worker, not in the argument parser.
 
 ## Build order
 
-0. Done so far: steps 1 to 4 (0.2.0 added editing, saving and find).
+0. Done so far: steps 1 to 5 (0.2.0 added editing, saving and find; 0.3.0
+   the installer, updates, Explorer verbs and File Manager's compare rows,
+   which shipped in File Manager 0.41.0).
    The window, title bar, tabs, start page, the command line and the
    single-instance hand-over; the engine with whitespace, case, blank-line
    and pattern rules; the reader; the side-by-side view with the gutter, the

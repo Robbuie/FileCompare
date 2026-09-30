@@ -1,0 +1,5 @@
+# Build-time only. None of this ships inside the installer.
+pyinstaller>=6.6
+# packaging/icon.py draws the icon with it. The icon is committed, so a
+# checkout builds an installer without Pillow; it is needed only to redraw it.
+pillow>=10

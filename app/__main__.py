@@ -35,6 +35,14 @@ def main() -> int:
         return 0
 
     config = Config.load()
+    request = cli.parse(argv, cwd)
+    if request.select_left:
+        # Explorer's "Select left side" with no window open: remember it and
+        # go. A window that flashes up to say "noted" is worse than none.
+        config.set("explorer.left", request.select_left)
+        config.save()
+        return 0
+
     look, source = appearance.resolve(config)
     window = MainWindow(config, look=look, look_source=source)
 
@@ -43,13 +51,16 @@ def main() -> int:
         lambda args, where: (window.open_request(cli.parse(args, where)), window.bring_forward()))
     listener.listen()
 
-    window.open_request(cli.parse(argv, cwd))
+    window.open_request(request)
     if config.get("window.maximized"):
         window.showMaximized()
     else:
         window.show()
     code = app.exec()
     listener.close()
+    # A downloaded, verified update runs once the window is gone, so the
+    # installer is not waiting on files this process still holds.
+    window.updates.install_staged()
     return code
 
 

@@ -11,6 +11,8 @@ not to code.
     FileCompare.exe <left> <right> --readonly left|right|both
     FileCompare.exe <left> <right> --mode text
     FileCompare.exe --merge <mine> <theirs> <base> -o <output>
+    FileCompare.exe --select-left <path>      Explorer's "Select left side"
+    FileCompare.exe --with-left <path>        Explorer's "Compare to left side"
 
 Parsing is pure: it turns a list of strings into a `Request` and never looks
 at the disk. Whether a path is a file or a folder is decided later, off the
@@ -39,11 +41,15 @@ class Request:
     mode: str = "auto"
     merge: bool = False
     output: str = ""
+    #: Explorer's verbs: remember a left side, or compare against it.
+    select_left: str = ""
+    with_left: str = ""
     error: str = ""
 
     @property
     def empty(self) -> bool:
-        return not self.paths and not self.error
+        return not self.paths and not self.error and not self.select_left \
+            and not self.with_left
 
 
 class _Parser(argparse.ArgumentParser):
@@ -61,6 +67,8 @@ def _parser() -> _Parser:
     parser.add_argument("--mode", choices=MODES, default="auto")
     parser.add_argument("--merge", action="store_true")
     parser.add_argument("-o", "--output", default="")
+    parser.add_argument("--select-left", default="")
+    parser.add_argument("--with-left", default="")
     return parser
 
 
@@ -79,6 +87,8 @@ def parse(argv: list[str], cwd: str = "") -> Request:
         mode=args.mode,
         merge=args.merge,
         output=resolve(args.output, cwd) if args.output else "",
+        select_left=resolve(args.select_left, cwd) if args.select_left else "",
+        with_left=resolve(args.with_left, cwd) if args.with_left else "",
     )
     for side in args.readonly:
         request.readonly.update(("left", "right") if side == "both" else (side,))

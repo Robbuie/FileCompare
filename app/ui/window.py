@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 
 from app import __version__
 from app.cli import Request
-from app.core import appearance
+from app.core import appearance, updates
 from app.core.config import Config
 from app.core.loader import Loader
 from app.core.rules import WHITESPACE, Rules
@@ -157,6 +157,15 @@ class MainWindow(QMainWindow):
         self._shortcuts()
         self.apply_look(self._look, self._look_source, save=False)
 
+        self.updates = updates.Updates(config, __version__, self)
+        self.updates.available.connect(self._update_available)
+        self.updates.uptodate.connect(
+            lambda current: self.flash(f"{current} is the latest version"))
+        self.updates.problem.connect(self.flash)
+        self.updates.progress.connect(self._update_progress)
+        self.updates.ready.connect(self._update_ready)
+        self.updates.start_if_wanted()
+
     # ----------------------------------------------------------------- tabs
 
     def _pages(self) -> list[QWidget]:
@@ -278,6 +287,22 @@ class MainWindow(QMainWindow):
         return tab
 
     def open_request(self, request: Request) -> None:
+        if request.select_left:
+            self._config.set("explorer.left", request.select_left)
+            self._config.save()
+            self.flash(f"Left side: {request.select_left}. "
+                       "Right-click another and choose Compare to left side.")
+            if not self.pages.count():
+                self.new_tab(request.select_left)
+            return
+        if request.with_left:
+            left = self._config.get("explorer.left")
+            if not left:
+                self.new_tab("", request.with_left)
+                self.flash("No left side chosen yet; pick one here.")
+                return
+            self.compare(left, request.with_left)
+            return
         if request.error:
             self.flash(request.error)
             if not self.pages.count():
@@ -377,11 +402,54 @@ class MainWindow(QMainWindow):
         follow.triggered.connect(self._follow)
         menu.addSeparator()
         menu.addAction("Keys\tF1", self.show_keys)
+        menu.addSeparator()
+        menu.addAction("Check for updates", lambda: self.updates.check(manual=True))
+        automatic = menu.addAction("Check for updates on launch")
+        automatic.setCheckable(True)
+        automatic.setChecked(bool(self._config.get("updates.check_on_launch")))
+        automatic.triggered.connect(
+            lambda on: self._config.set("updates.check_on_launch", bool(on)))
+        backup = menu.addAction("Keep a .orig copy on first save")
+        backup.setCheckable(True)
+        backup.setChecked(bool(self._config.get("save.backup")))
+        backup.triggered.connect(lambda on: self._config.set("save.backup", bool(on)))
         menu.addAction("About File Compare", self._about)
         menu.addSeparator()
         menu.addAction("Exit", self.close)
         menu.aboutToHide.connect(menu.deleteLater)
         menu.popup(at)
+
+    # -------------------------------------------------------------- updates
+
+    def _update_available(self, release) -> None:
+        """Found something newer. Nothing is downloaded until this is answered."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Update")
+        size = f" ({release.size / 1e6:.0f} MB)" if release.size else ""
+        box.setText(f"File Compare {release.version} is available{size}. "
+                    f"This is {__version__}.")
+        box.setInformativeText("It downloads in the background and installs when you quit.")
+        download = box.addButton("Download", QMessageBox.AcceptRole)
+        skip = box.addButton("Skip this version", QMessageBox.RejectRole)
+        box.addButton("Later", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is download:
+            self.updates.accept(release)
+        elif box.clickedButton() is skip:
+            self.updates.skip(release)
+
+    def _update_progress(self, done: int, total: int) -> None:
+        share = (done / total * 100) if total else 0
+        self.statusBar().showMessage(f"Downloading update  {share:.0f}%", 2000)
+
+    def _update_ready(self, release) -> None:
+        self.flash(f"File Compare {release.version} installs when you quit")
+        answer = QMessageBox.question(
+            self, "Update ready",
+            f"File Compare {release.version} is downloaded. Quit and install it now?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer == QMessageBox.Yes:
+            self.close()
 
     def show_keys(self) -> None:
         box = QMessageBox(self)
@@ -521,5 +589,6 @@ class MainWindow(QMainWindow):
             self._config.set("window.width", self.width())
             self._config.set("window.height", self.height())
         self._config.save()
+        self.updates.shutdown()
         self._loader.shutdown()
         super().closeEvent(event)

@@ -51,6 +51,15 @@ DEFAULTS: dict[str, Any] = {
     # Megabytes past which a file is not read as text.
     "load.max_mb": 512,
 
+    # Look for a new version once, a few seconds after the window opens.
+    # The only network call the application makes (CLAUDE.md, Scope).
+    "updates.check_on_launch": True,
+    # A version the user said "skip" to; not offered again until a newer one.
+    "updates.skip_version": "",
+
+    # Explorer's "Select left side": the path waiting for "Compare to left side".
+    "explorer.left": "",
+
     # Keep `name.ext.orig` beside a file the first time it is saved.
     "save.backup": False,
 
