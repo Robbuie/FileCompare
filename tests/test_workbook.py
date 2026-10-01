@@ -108,3 +108,19 @@ def test_names_say_which_files_are_workbooks():
     assert workbook.is_workbook("C:\\x\\Schedule.XLSX")
     assert workbook.is_workbook("a.xlsm")
     assert not workbook.is_workbook("a.xls") and workbook.is_old_workbook("a.xls")
+
+
+def test_a_sheet_that_understates_its_size_is_read_whole():
+    import re
+    import zipfile
+
+    data = book_bytes({"S": [["k", "v"]] + [[f"r{i}", i] for i in range(40)]})
+    source = zipfile.ZipFile(io.BytesIO(data))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as target:
+        for item in source.infolist():
+            body = source.read(item.filename)
+            if item.filename.startswith("xl/worksheets/sheet"):
+                body = re.sub(rb'<dimension ref="[^"]*"/>', b'<dimension ref="A1:B2"/>', body)
+            target.writestr(item, body)
+    assert len(workbook.read(out.getvalue()).sheets["S"].rows) == 40

@@ -115,6 +115,7 @@ def test_the_request_is_one_copy_job_and_one_recycle_job_in_file_managers_shape(
     plan = S.plan(tree(), S.TO_RIGHT, S.MIRROR)
     got = S.request(plan, plan.actions, "S:\\Jobs", "D:\\Jobs", title="S -> D")
     assert got["version"] == 1 and got["from"] == "File Compare"
+    assert (got["source_root"], got["target_root"]) == ("S:\\Jobs", "D:\\Jobs")
     copy, recycle = got["jobs"]
     assert copy["kind"] == "copy" and copy["destination"] == "D:\\Jobs"
     assert copy["conflict"] == "newer"
@@ -130,6 +131,7 @@ def test_only_ticked_actions_are_sent():
     plan = S.plan(tree(), S.TO_RIGHT, S.UPDATE)
     one = [a for a in plan.copies if a.rel == "left.txt"]
     got = S.request(plan, one, "\\\\srv\\a", "\\\\srv\\b")
+    assert got["target_root"] == "\\\\srv\\b"
     assert got["jobs"] == [{"kind": "copy", "sources": ["\\\\srv\\a\\left.txt"],
                             "destination": "\\\\srv\\b", "into": ["\\\\srv\\b"],
                             "conflict": "newer"}]
@@ -161,11 +163,14 @@ def test_the_request_is_written_and_file_manager_started_with_it(tmp_path, monke
     assert program == "FileManager.exe"
     assert started == [["FileManager.exe", "--queue", path]]
     assert json.loads(open(path).read()) == {"version": 1, "jobs": []}
-    assert handoff.result(path) is None
+    assert handoff.result(path) == (handoff.WAITING, None)
+    with open(handoff.taken_path(path), "w") as out:
+        out.write("{}")
+    assert handoff.result(path) == (handoff.TAKEN, None)
     with open(handoff.result_path(path), "w") as out:
         json.dump({"copied": 3}, out)
-    assert handoff.result(path) == {"copied": 3}
-    assert not (tmp_path / path).exists()          # both files tidied away
+    assert handoff.result(path) == (handoff.DONE, {"copied": 3})
+    assert list(tmp_path.iterdir()) == []          # every file tidied away
 
 
 def test_without_file_manager_nothing_is_written(tmp_path, monkeypatch):
@@ -219,3 +224,73 @@ def test_the_preview_will_not_send_two_folders_that_are_one():
     dialog = SyncDialog(tree(), "C:\\A", "C:\\A\\B")
     assert not dialog.go.isEnabled()
     assert "inside" in dialog.warning.text()
+
+
+# ------------------------------------------------- what the review found (1.4.1)
+
+def test_a_folder_holding_what_the_mask_hides_is_never_taken_whole():
+    root = F.build([e("keep.txt")],
+                   [e("keep.txt"), d("old"), e("old\\x.bak"), d("cfg"), e("cfg\\a.ini"),
+                    e("cfg\\b.dwg")],
+                   mask=F.Mask.parse("*.ini;*.txt;-*.bak"))
+    plan = S.plan(root, S.TO_RIGHT, S.MIRROR)
+    # `old` holds nothing the include mask keeps, so it is not in the tree at
+    # all; `cfg` holds a kept file and a hidden one, so it is not taken whole.
+    assert not plan.removals
+    assert ("cfg", S.HOLDS_HIDDEN) in {(a.rel, a.why) for a in plan.skipped}
+    excluded = F.build([e("keep.txt")], [e("keep.txt"), d("old"), e("old\\x.bak")],
+                       mask=F.Mask.parse("-*.bak"))
+    assert ("old", S.HOLDS_HIDDEN) in {(a.rel, a.why) for a in
+                                       S.plan(excluded, S.TO_RIGHT, S.MIRROR).skipped}
+
+
+def test_a_folder_holding_something_unreadable_or_a_link_is_never_taken_whole():
+    root = F.build([e("a.txt")],
+                   [e("a.txt"), d("old"), d("old\\locked", error="Access is denied"),
+                    d("old\\lnk", is_link=True), e("old\\x.txt")])
+    removing = S.plan(root, S.TO_RIGHT, S.REMOVE, nodes=[find(root, "old")])
+    assert not removing.removals
+    assert removing.skipped[0].why in (S.HOLDS_UNREAD, S.HOLDS_LINK)
+    copying = S.plan(root, S.TO_LEFT, S.UPDATE)
+    assert not any(a.rel == "old" for a in copying.copies)
+
+
+def test_a_picked_file_whose_folder_is_not_on_the_target_says_so():
+    root = F.build([d("onlyL"), d("onlyL\\deep"), e("onlyL\\deep\\c.txt")], [])
+    plan = S.plan(root, S.TO_RIGHT, S.COPY, nodes=[find(root, "onlyL\\deep\\c.txt")])
+    assert not plan.copies and plan.skipped[0].why == S.NO_FOLDER
+    whole = S.plan(root, S.TO_RIGHT, S.COPY, nodes=[find(root, "onlyL")])
+    assert [a.rel for a in whole.copies] == ["onlyL"]
+
+
+def test_a_bare_drive_is_its_root_in_every_path_sent():
+    from app import cli
+
+    assert cli.resolve("D:", "C:\\work") == "D:\\"
+    plan = S.plan(tree(), S.TO_RIGHT, S.UPDATE)
+    got = S.request(plan, plan.copies, "C:", "D:")
+    assert got["jobs"][0]["destination"] == "D:\\"
+    assert all(src.startswith("C:\\") for src in got["jobs"][0]["sources"])
+
+
+def test_a_refusal_reads_as_one_and_says_nothing_happened():
+    from app.core.folderdiff import describe
+
+    line = describe({"version": 1, "refused": ["the request has no jobs"]})
+    assert line.startswith("File Manager refused the sync") and "Nothing was" in line
+
+
+def test_swapping_or_masking_clears_the_tree_until_it_is_built_again(tmp_path):
+    from app.core.folderdiff import FolderSession
+    from app.core.loader import Loader
+
+    loader = Loader()
+    session = FolderSession(loader, str(tmp_path), str(tmp_path))
+    session.tree = F.build([e("a")], [])
+    session.swap()
+    assert session.tree is None
+    session.tree = F.build([e("a")], [])
+    session.set_mask("*.txt")
+    assert session.tree is None
+    session.stop()
+    loader.shutdown()

@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.4.1 - sync and share fixes from a review
+
+- **A folder is only copied or removed whole when everything under it was
+  seen.** A folder holding something that could not be read, a link or
+  junction, or files the name filter hides is now left alone in the sync
+  preview, saying which -- before, mirror with a filter such as `-*.bak`
+  would have removed a folder along with the files the filter hid.
+- **A picked file whose folder is not on the other side** is left alone
+  with "copy the folder" rather than sent and failing in File Manager.
+- **Swapping sides or changing the name filter** clears the tree until it
+  is built again, so a sync cannot be planned from the old orientation and
+  run the opposite way to the one shown.
+- **A drive given on its own** (`D:`) means its root, rather than a path
+  File Manager refuses.
+- **The sync request names its two folders**, which File Manager 0.46.1
+  requires, and File Compare stops waiting with a message if File Manager
+  has not taken the request within 45 seconds, or as soon as it refuses or
+  is told no.
+- **Compare contents** on a pair with a local side and a share runs in the
+  share's reader, and stops with a message when nothing has been read for
+  the timeout.
+- **Excel sheets whose files understate their size** -- some exporters
+  write a wrong one -- are read in full rather than cut short and called
+  the same.
+- A share reader that dies at the moment a read is sent to it answers that
+  read rather than leaving it waiting.
+
 ## 1.4.0 - a dead share can be stopped
 
 - **Reads, folder walks and change checks on a network share run in a

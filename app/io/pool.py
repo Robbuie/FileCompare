@@ -126,7 +126,15 @@ class Worker:
     def submit(self, request: int, fn, args, kwargs, wants_progress: bool) -> None:
         with self._lock:
             self.pending.add(request)
-        self.inbox.put(("run", request, fn, args, kwargs, wants_progress))
+        try:
+            self.inbox.put(("run", request, fn, args, kwargs, wants_progress))
+        except (OSError, ValueError):
+            pass
+        # The process can die between the pool's look at it and this line;
+        # once its reader has given up nobody would answer this request.
+        if not self._reader.is_alive() or not self.process.is_alive():
+            self._fail_all("The reader for this share ended unexpectedly. "
+                           "Retry reads it again.")
 
     def cancel(self, request: int) -> None:
         if request in self.pending:
@@ -145,7 +153,10 @@ class Worker:
             except queue.Empty:
                 if not self.process.is_alive():
                     # Died on its own (a crash in a native library): every
-                    # job it held is answered, never left waiting.
+                    # job it held is answered, never left waiting -- and the
+                    # flag is set first, so a submit racing this one sees a
+                    # dead reader and answers its own request.
+                    self._stop.set()
                     self._fail_all("The reader for this share ended unexpectedly. "
                                    "Retry reads it again.")
                     return
@@ -206,7 +217,7 @@ class Pool:
                wants_progress: bool = False) -> None:
         with self._lock:
             worker = self._workers.get(key)
-            if worker is None or not worker.process.is_alive():
+            if worker is None or not worker.process.is_alive() or worker._stop.is_set():
                 worker = Worker(key, self._deliver, self._progressed)
                 self._workers[key] = worker
         worker.submit(request, fn, args, kwargs, wants_progress)

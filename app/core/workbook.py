@@ -106,6 +106,10 @@ def _read(data: bytes, formulas: bool) -> Book:
     try:
         for sheet in book.worksheets:
             names.append(sheet.title)
+            # In read-only mode openpyxl believes the sheet's stored size, and
+            # some exporters write a wrong one: a sheet that says A1:B2 and
+            # holds forty rows would be read as one and called the same.
+            sheet.reset_dimensions()
             rows: list[list[str]] = []
             widest = 0
             for number, values in enumerate(sheet.iter_rows(values_only=True)):

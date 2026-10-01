@@ -482,7 +482,7 @@ class FolderView(QWidget):
         """The preview, and on its OK the handoff. Nothing is sent from here
         that the preview did not show with its box ticked."""
         session = self.session
-        if session.tree is None:
+        if session.tree is None or session.building:
             return
         if session.syncing:
             self.status.emit("A sync is already with File Manager; this comparison is "

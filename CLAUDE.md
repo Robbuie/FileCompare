@@ -468,7 +468,12 @@ made in a worker, not in the argument parser.
   `FileManager.exe --queue <file>`. File Manager refuses the whole request
   unless every part is a copy or a recycle of full paths landing under the
   destination, so **the request format is a contract with that repo**:
-  change it there and here in the same sitting, and bump `version`. When the
+  change it there and here in the same sitting, and bump `version`. Since
+  1.4.1 / File Manager 0.46.1 it carries `source_root` and `target_root`,
+  and File Manager refuses any path outside them and any request file not
+  in the handoff folder. File Manager answers every request beside it
+  (`.taken.json`, then `.result.json`), and `FolderSession` gives up after
+  `TAKE_SECONDS` without a "taken". When the
   jobs end File Manager writes `<name>.result.json` beside the request;
   `FolderSession` polls for it every two seconds, then walks again. File
   Manager shows no second dialog, which is why nothing is sent here that the
@@ -593,6 +598,12 @@ made in a worker, not in the argument parser.
   file written by a script and never opened in Excel has none, which is
   what "Formulas" is for. `workbook.read` is cached on the bytes, so
   changing the key or a toggle does not parse the file again.
+- **A sync never takes a folder whole that holds anything it did not see.**
+  `syncplan._whole_refusal`: nothing unreadable, no link or junction, and
+  nothing the name mask left out (`Node.masked`, set by `folders.build` for
+  every folder above an excluded entry). Each was a way for mirror or a
+  picked removal to delete files nobody was shown; the tests in
+  `test_sync.py` under "what the review found" hold them.
 - **A job for `submit_io` lives in `app/io/` and takes `progress=` by
   name.** A worker process imports the job's module to run it, and a module
   under `app/core/` or `app/ui/` brings Qt -- fifty megabytes and a fifth of

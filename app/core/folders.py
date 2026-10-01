@@ -83,6 +83,10 @@ class Node:
     #: For folders: how many files below differ, and how many there are.
     differing: int = 0
     files: int = 0
+    #: 1.4.1: per side, whether the name mask left something out somewhere
+    #: under this folder. A sync never copies or removes such a folder whole:
+    #: what the mask hid would go with it.
+    masked: tuple[bool, bool] = (False, False)
 
     @property
     def is_dir(self) -> bool:
@@ -183,14 +187,31 @@ def build(left: Iterable[Entry], right: Iterable[Entry], *, mask: Mask | None = 
             return False
         return True
 
+    hidden: dict[str, set[str]] = {"left": set(), "right": set()}
     for side, entries in (("left", left), ("right", right)):
         excluded.clear()
         # Parents before children, whatever order the walk produced.
         for entry in sorted(entries, key=lambda e: e.rel.lower().count("\\")):
-            if not entry.rel or not kept(entry):
+            if not entry.rel:
+                continue
+            if not kept(entry):
+                parent_rel = entry.rel.rpartition("\\")[0]
+                if parent_rel:
+                    hidden[side].add(parent_rel.lower())
                 continue
             node = node_for(entry.rel)
             setattr(node, side, entry)
+    for number, side in enumerate(("left", "right")):
+        for rel in hidden[side]:
+            # Every folder above the one that held the hidden entry, as far as
+            # the tree has it: a folder the mask left out whole is not there.
+            parts = rel.split("\\")
+            for depth in range(len(parts), 0, -1):
+                found = index.get("\\".join(parts[:depth]))
+                if found is not None:
+                    marks = list(found.masked)
+                    marks[number] = True
+                    found.masked = (marks[0], marks[1])
 
     _judge(root, tolerance)
     _sort(root)

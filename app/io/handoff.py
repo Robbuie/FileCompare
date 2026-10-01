@@ -85,28 +85,39 @@ def send(request: dict, *, program: str = "", where: str = "") -> tuple[str, str
     return path, found
 
 
+WAITING = "waiting"      # nothing from File Manager yet
+TAKEN = "taken"          # File Manager queued it (`<name>.taken.json`)
+DONE = "done"            # the result is in
+
+
 def result_path(request_path: str) -> str:
     root, _ext = os.path.splitext(request_path)
     return root + ".result.json"
 
 
-def result(request_path: str) -> dict | None:
-    """What File Manager wrote when the jobs ended, or None if not yet.
-    Both files are removed once the result has been read."""
+def taken_path(request_path: str) -> str:
+    root, _ext = os.path.splitext(request_path)
+    return root + ".taken.json"
+
+
+def result(request_path: str) -> tuple[str, dict | None]:
+    """`(state, outcome)`: what File Manager has said about a request. The
+    outcome is what it wrote when the jobs ended -- or when it refused the
+    request -- and once it has been read the request's files are removed."""
     path = result_path(request_path)
     try:
         with open(path, encoding="utf-8") as handle:
             found = json.load(handle)
     except FileNotFoundError:
-        return None
+        return (TAKEN if os.path.exists(taken_path(request_path)) else WAITING), None
     except (OSError, ValueError):
-        return None
-    for leftover in (path, request_path):
+        return WAITING, None
+    for leftover in (path, taken_path(request_path), request_path):
         try:
             os.remove(leftover)
         except OSError:
             pass
-    return found if isinstance(found, dict) else None
+    return DONE, (found if isinstance(found, dict) else {})
 
 
 def drive_is_remote(path: str) -> bool:

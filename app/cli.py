@@ -112,6 +112,11 @@ def resolve(path: str, cwd: str) -> str:
     path = path.strip().strip('"')
     if not path:
         return path
+    if len(path) == 2 and path[1] == ":" and path[0].isalpha():
+        # `D:` alone means "wherever D: was last", and joined to a name it
+        # makes `D:name`, which File Manager rightly refuses as not a full
+        # path. A drive given on its own is its root.
+        return path + "\\"
     if sys.platform != "win32" and (path.startswith("/") or cwd.startswith("/")):
         # Off Windows -- the tests, and the preview tool -- a POSIX path stays
         # one. `ntpath` would turn its slashes round and it would not exist.

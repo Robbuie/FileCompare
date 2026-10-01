@@ -14,11 +14,14 @@ finding files is not a dead share; one that has found nothing new for
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from app.core import folders
 from app.core.loader import Envelope, Loader
 from app.io import handoff as io_handoff
+from app.io import volume
 from app.io import walk as io_walk
 
 LEFT, RIGHT = 0, 1
@@ -61,6 +64,9 @@ class FolderSession(QObject):
 
     #: Seconds between looks for File Manager's result file.
     POLL = 2.0
+    #: Seconds File Manager has to say it took a request before this stops
+    #: waiting. Generous: a File Manager not yet running has to start first.
+    TAKE_SECONDS = 45.0
 
     #: Seconds between looks at the walks' progress.
     TICK = 0.25
@@ -79,6 +85,8 @@ class FolderSession(QObject):
         self.content: io_walk.Progress | None = None
         self.content_total = 0
         self._content_request = 0
+        self._content_seen = -1
+        self._content_still = 0.0
         self._content_nodes: dict[int, folders.Node] = {}
         self.problem = ""
         loader.finished.connect(self._finished)
@@ -95,6 +103,8 @@ class FolderSession(QObject):
         self._poll = QTimer(self)
         self._poll.setInterval(int(self.POLL * 1000))
         self._poll.timeout.connect(self._look_for_result)
+        self._sent_at = 0.0
+        self._taken = False
 
     # ------------------------------------------------------------ the state
 
@@ -143,10 +153,16 @@ class FolderSession(QObject):
         if mask == self.mask:
             return
         self.mask = mask
+        # No tree until the new one is built: a sync planned in between would
+        # be planned from verdicts that no longer hold.
+        self.tree = None
         self._build()
 
     def swap(self) -> None:
         self.sides.reverse()
+        # Above all here: the old tree's left is the new right, and a copy
+        # planned from it would run the opposite way to the one shown.
+        self.tree = None
         self._build()
 
     def compare_contents(self, *, all_pairs: bool = False, nodes=None) -> int:
@@ -165,7 +181,11 @@ class FolderSession(QObject):
                  for i, node in self._content_nodes.items()]
         self.content = io_walk.Progress()
         self.content_total = len(pairs)
-        self._content_request = self._loader.submit_io(left_root, io_walk.compare_contents,
+        self._content_seen, self._content_still = -1, 0.0
+        # The pool is chosen by the side on a share: a local left and a dead
+        # right would otherwise pin a loader thread on the right's reads.
+        where = right_root if volume.key(left_root) == volume.LOCAL else left_root
+        self._content_request = self._loader.submit_io(where, io_walk.compare_contents,
                                                        pairs, progress=self.content)
         self._timer.start()
         self.changed.emit()
@@ -198,8 +218,10 @@ class FolderSession(QObject):
 
     def send_sync(self, request: dict) -> bool:
         """Hand the jobs to File Manager. False if one is already out."""
-        if self.syncing or not request.get("jobs"):
+        if self.syncing or self.building or not request.get("jobs"):
             return False
+        self._sent_at = time.monotonic()
+        self._taken = False
         self._send_request = self._loader.submit(io_handoff.send, request)
         self.handed.emit("Sending to File Manager...")
         return True
@@ -237,8 +259,18 @@ class FolderSession(QObject):
             return True
         if request == self._poll_request:
             self._poll_request = 0
-            outcome = envelope.value if envelope.ok else None
+            state, outcome = envelope.value if envelope.ok else (io_handoff.WAITING, None)
+            if state == io_handoff.TAKEN:
+                self._taken = True
             if outcome is None:
+                if not self._taken and time.monotonic() - self._sent_at > self.TAKE_SECONDS:
+                    # Nothing took it: no File Manager that reads requests
+                    # (0.46 or later), or one that refused it before it could
+                    # say so. Stop waiting rather than hold every later sync.
+                    self.forget_sync()
+                    self.handed.emit("File Manager did not take the sync. It needs File "
+                                     "Manager 0.46 or later; nothing was copied or "
+                                     "removed.")
                 return True
             self._poll.stop()
             self.pending = ""
@@ -269,6 +301,22 @@ class FolderSession(QObject):
                                               progress=side.progress)
 
     def _tick(self) -> None:
+        if self._content_request and self.content is not None:
+            seen = self.content.files
+            if seen != self._content_seen:
+                self._content_seen, self._content_still = seen, 0.0
+            else:
+                self._content_still += self.TICK
+                if self._content_still >= self.timeout:
+                    self._loader.abandon(self._content_request)
+                    self.content.cancel.set()
+                    self._content_request = 0
+                    self.content = None
+                    self._content_nodes = {}
+                    self.problem = (f"Comparing contents stopped: nothing read for "
+                                    f"{self.timeout:g} seconds. The share may be "
+                                    "unreachable.")
+                    self.changed.emit()
         for side in self.sides:
             if side.state != WALKING or side.progress is None:
                 continue
@@ -346,6 +394,10 @@ class FolderSession(QObject):
 
 def describe(outcome: dict) -> str:
     """File Manager's result, in one line."""
+    if outcome.get("refused") and "copied" not in outcome:
+        # Refused whole, before anything was queued.
+        return ("File Manager refused the sync: " + "; ".join(outcome["refused"])
+                + ". Nothing was copied or removed.")
     parts = [f"{int(outcome.get('copied', 0)):,} copied"]
     for key in ("skipped", "failed"):
         if outcome.get(key):
@@ -358,6 +410,8 @@ def describe(outcome: dict) -> str:
 
 
 def _join(root: str, rel: str) -> str:
+    if len(root) == 2 and root[1] == ":":
+        root += "\\"
     if not rel:
         return root
     separator = "\\" if ("\\" in root or ":" in root[:3]) else "/"

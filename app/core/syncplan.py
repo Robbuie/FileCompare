@@ -25,9 +25,14 @@ Three kinds of plan:
 
 Rules all three keep, the same as File Manager's sync:
 
-  * **A folder on one side only is one action**, copied or removed whole.
+  * **A folder on one side only is one action**, copied or removed whole --
+    and only when everything under it was seen: nothing unreadable, no link
+    or junction, nothing the name mask left out of the tree. Otherwise it is
+    left alone, and the preview says which of the three.
   * **Links and junctions are never copied or removed**, and never walked.
   * **Nothing that could not be read is acted on.**
+  * **A picked row whose folder is not on the target is left alone**: the
+    queue copies into folders that exist, and the folder is the thing to pick.
 
 Pure: nodes in, actions out, and the request as a dict. The tests prove it
 without a disk.
@@ -68,6 +73,12 @@ UNSURE = "same time, different contents"
 CLASH = "a folder on one side, a file on the other"
 LINK = "a link or junction"
 UNREAD = "could not be read"
+# 1.4.1: a folder that cannot be taken whole, and a file whose folder is not
+# there to put it in.
+HOLDS_LINK = "holds a link or junction"
+HOLDS_UNREAD = "holds something that could not be read"
+HOLDS_HIDDEN = "holds files the name filter hides"
+NO_FOLDER = "its folder is not on the target; copy the folder"
 
 
 @dataclass(frozen=True)
@@ -140,6 +151,40 @@ def _linked(node: F.Node) -> bool:
     return bool((node.left and node.left.is_link) or (node.right and node.right.is_link))
 
 
+def _whole_refusal(node: F.Node, direction: str, *, source: bool) -> str:
+    """Why a folder cannot be copied or removed whole, or "".
+
+    Everything under it goes with it, so everything under it has to have been
+    seen: nothing unreadable (its contents are unknown), no link or junction
+    (the engine could walk through it, or remove what it points at), and
+    nothing the name mask left out of the tree (it would go too, unseen).
+    """
+    side = (0 if direction == TO_RIGHT else 1) if source else (1 if direction == TO_RIGHT else 0)
+    if node.masked[side]:
+        return HOLDS_HIDDEN
+    for child in node.walk():
+        if _unread(child):
+            return HOLDS_UNREAD
+        if _linked(child):
+            return HOLDS_LINK
+        if child.masked[side]:
+            return HOLDS_HIDDEN
+    return ""
+
+
+def _target_folder_missing(node: F.Node, direction: str) -> bool:
+    """Whether a folder above `node` is missing on the target side, so a copy
+    of `node` alone would have nowhere to land. The queue does not make the
+    folders a copy goes into; a whole folder carries its own."""
+    up = node.parent
+    while up is not None and up.rel:
+        _source, target = _sides(up, direction)
+        if target is None:
+            return True
+        up = up.parent
+    return False
+
+
 def complete(root: F.Node) -> bool:
     """Whether both walks saw everything: no folder or file that could not be
     read anywhere in the tree."""
@@ -160,7 +205,14 @@ def _visit(node: F.Node, direction: str, *, picked: bool, removals: bool,
         out.append(Action(ACT_SKIP, node.rel, CLASH))
         return
     if source is not None and target is None:
+        if picked and _target_folder_missing(node, direction):
+            out.append(Action(ACT_SKIP, node.rel, NO_FOLDER, is_dir=source.is_dir))
+            return
         if source.is_dir:
+            refused = _whole_refusal(node, direction, source=True)
+            if refused:
+                out.append(Action(ACT_SKIP, node.rel, refused, is_dir=True))
+                return
             files, size = _files_under(node, direction)
             out.append(Action(ACT_COPY, node.rel, NEW, is_dir=True, size=size,
                               files=files, source_mtime=source.mtime))
@@ -170,6 +222,10 @@ def _visit(node: F.Node, direction: str, *, picked: bool, removals: bool,
         return
     if source is None and target is not None:
         if removals:
+            refused = _whole_refusal(node, direction, source=False) if target.is_dir else ""
+            if refused:
+                out.append(Action(ACT_SKIP, node.rel, refused, is_dir=True))
+                return
             files, _size = _files_under(node, direction, source=False)
             out.append(Action(ACT_REMOVE, node.rel, EXTRA, is_dir=target.is_dir,
                               files=files if target.is_dir else 1,
@@ -186,6 +242,9 @@ def _visit(node: F.Node, direction: str, *, picked: bool, removals: bool,
     if node.status in (F.SAME, F.CONTENT_SAME):
         return
     if picked:
+        if _target_folder_missing(node, direction):
+            out.append(Action(ACT_SKIP, node.rel, NO_FOLDER))
+            return
         out.append(Action(ACT_COPY, node.rel, REPLACE, size=source.size,
                           source_mtime=source.mtime, target_mtime=target.mtime))
         return
@@ -234,10 +293,13 @@ def plan(root: F.Node, direction: str, mode: str, *,
             _source, target = _sides(node, direction)
             if target is None:
                 continue
+            refused = _whole_refusal(node, direction, source=False) if target.is_dir else ""
             if _unread(node):
                 result.actions.append(Action(ACT_SKIP, node.rel, UNREAD, is_dir=target.is_dir))
             elif _linked(node):
                 result.actions.append(Action(ACT_SKIP, node.rel, LINK, is_dir=target.is_dir))
+            elif refused:
+                result.actions.append(Action(ACT_SKIP, node.rel, refused, is_dir=True))
             else:
                 files, _size = _files_under(node, direction, source=False)
                 result.actions.append(Action(ACT_REMOVE, node.rel, PICKED,
@@ -261,6 +323,8 @@ def plan(root: F.Node, direction: str, mode: str, *,
 # ------------------------------------------------------------- the request
 
 def _join(root: str, rel: str) -> str:
+    if len(root) == 2 and root[1] == ":":
+        root += "\\"            # `D:` alone is drive-relative; its root is meant
     if not rel:
         return root
     windows = "\\" in root or root[1:2] == ":"
@@ -278,6 +342,8 @@ def request(plan_: Plan, chosen: Iterable[Action], left_root: str, right_root: s
             title: str = "") -> dict:
     """The jobs File Manager's queue is asked to run, as `core/handoff.py`
     there reads them: at most one copy job and one recycle job."""
+    left_root, right_root = (r + "\\" if len(r) == 2 and r[1] == ":" else r
+                             for r in (left_root, right_root))
     source_root, target_root = ((left_root, right_root) if plan_.direction == TO_RIGHT
                                 else (right_root, left_root))
     chosen = list(chosen)
@@ -295,7 +361,10 @@ def request(plan_: Plan, chosen: Iterable[Action], left_root: str, right_root: s
     if removals:
         jobs.append({"kind": "recycle",
                      "sources": [_join(target_root, a.rel) for a in removals]})
-    return {"version": 1, "from": "File Compare", "title": title, "jobs": jobs}
+    # The two roots let File Manager refuse anything outside them: every copy
+    # from inside the source, every copy and removal inside the target.
+    return {"version": 1, "from": "File Compare", "title": title,
+            "source_root": source_root, "target_root": target_root, "jobs": jobs}
 
 
 def refusal(left_root: str, right_root: str) -> str:
