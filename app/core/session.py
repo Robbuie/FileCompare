@@ -66,12 +66,12 @@ SYNC_LINES = 40_000
 POLL_SECONDS = 3.0
 
 
-def open_side(path: str, max_bytes: int) -> tuple[str, io_load.Loaded | None]:
+def open_side(path: str, max_bytes: int, encoding: str = "") -> tuple[str, io_load.Loaded | None]:
     """The worker's half: what the path is, and its text if it is a file."""
     what = io_kind.kind(path)
     if what != io_kind.FILE:
         return what, None
-    return what, io_load.load(path, max_bytes=max_bytes)
+    return what, io_load.load(path, max_bytes=max_bytes, encoding=encoding)
 
 
 def save_side(path: str, lines: list[str], endings: list[str], encoding: str, bom: bool,
@@ -111,6 +111,8 @@ class Side:
     #: Shown through a format comparer (L5X, XML...): the lines are not the
     #: file's, so nothing is edited or saved through them.
     structured: bool = False
+    #: 1.2: the encoding the side's "Read as" chose, "" to work it out.
+    read_as: str = ""
 
     @property
     def lines(self) -> list[str]:
@@ -254,6 +256,13 @@ class Session(QObject):
             self._open(index)
 
     def retry(self, index: int) -> None:
+        self._open(index)
+
+    def read_as(self, index: int, encoding: str) -> None:
+        """Read one side again as `encoding` ("" to work it out). Edits on
+        that side are thrown away; the tab asks first."""
+        side = self.sides[index]
+        side.read_as = encoding
         self._open(index)
 
     def reload(self) -> None:
@@ -470,7 +479,8 @@ class Session(QObject):
         side.state = LOADING
         side.error = ""
         side.doc = None
-        side.request = self._loader.submit(open_side, side.path, self.options.max_bytes)
+        side.request = self._loader.submit(open_side, side.path, self.options.max_bytes,
+                                           side.read_as)
         self.result = None
         self._compare_request = 0
         self._arm(index, side.request)

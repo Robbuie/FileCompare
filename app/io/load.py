@@ -14,13 +14,21 @@ The order of the encoding ladder:
      first few kilobytes. Some PLC and HMI tools write exactly this.
   3. **UTF-8**, strictly. Almost everything is, and a strict decode that
      succeeds on non-ASCII text is very strong evidence.
-  4. **Windows-1252**, which is what an old file on a Windows share almost
+  4. **Another code page** (1.2), when Windows-1252 would read the file's
+     words as nonsense and one of the others reads them cleanly: Central
+     European, Cyrillic, Greek, Turkish, Baltic, DOS, Japanese, Chinese,
+     Korean. `io/detect.py` decides, and the header says "(detected)".
+  5. **Windows-1252**, which is what an old file on a Windows share almost
      always is when it is not UTF-8. Five byte values are undefined in it;
      a file containing one falls to
-  5. **Latin-1**, which decodes every byte and is marked as a guess.
+  6. **Latin-1**, which decodes every byte and is marked as a guess.
 
-A file that is none of these -- NULs outside a UTF-16 pattern -- is binary,
-and is reported as such rather than decoded into nonsense.
+A file that is none of these -- NULs outside a UTF-16 pattern, and not
+UTF-16 text in another script either -- is binary, and is reported as such
+rather than decoded into nonsense.
+
+The side's menu can read a file as a named encoding instead (`encoding=`),
+for when the ladder is wrong; that answer is used as given.
 
 Nothing here imports Qt. It runs off the UI thread, and the long-path rule is
 applied here at the file call and nowhere else (`longpath.api`).
@@ -34,7 +42,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from app.io import longpath
+from app.io import detect, longpath
 
 #: How much of the start of a file the sniffing looks at.
 SNIFF = 8192
@@ -65,7 +73,46 @@ LABELS = {
     "cp1252": "Windows-1252",
     "latin-1": "Latin-1",
     "ascii": "ASCII",
+    "cp1250": "Windows-1250",
+    "cp1251": "Windows-1251",
+    "cp1253": "Windows-1253",
+    "cp1254": "Windows-1254",
+    "cp1257": "Windows-1257",
+    "cp437": "DOS 437",
+    "cp850": "DOS 850",
+    "cp866": "DOS 866",
+    "shift_jis": "Shift JIS",
+    "big5": "Big5",
+    "euc_kr": "EUC-KR",
+    "gb18030": "GB18030",
+    "utf-16": "UTF-16",
 }
+
+#: What the side's "Read as" menu offers: (label, encoding). Everything the
+#: detector can answer, and the Unicode forms.
+READ_AS = (
+    ("UTF-8", "utf-8"),
+    ("Windows-1252 (Western)", "cp1252"),
+    ("Windows-1250 (Central European)", "cp1250"),
+    ("Windows-1251 (Cyrillic)", "cp1251"),
+    ("Windows-1253 (Greek)", "cp1253"),
+    ("Windows-1254 (Turkish)", "cp1254"),
+    ("Windows-1257 (Baltic)", "cp1257"),
+    ("DOS 437 (US)", "cp437"),
+    ("DOS 850 (Western)", "cp850"),
+    ("DOS 866 (Cyrillic)", "cp866"),
+    ("Shift JIS (Japanese)", "shift_jis"),
+    ("GB18030 (Chinese, simplified)", "gb18030"),
+    ("Big5 (Chinese, traditional)", "big5"),
+    ("EUC-KR (Korean)", "euc_kr"),
+    ("UTF-16 LE", "utf-16-le"),
+    ("UTF-16 BE", "utf-16-be"),
+    ("Latin-1 (every byte as itself)", "latin-1"),
+)
+
+
+def label(encoding: str) -> str:
+    return LABELS.get(encoding, encoding)
 
 
 @dataclass
@@ -86,6 +133,10 @@ class Loaded:
     bom: bool = False
     #: True when the encoding came from the last rung of the ladder.
     guessed: bool = False
+    #: 1.2: True when `io/detect.py` chose the code page, and when the side's
+    #: menu did (`forced`).
+    detected: bool = False
+    forced: bool = False
     #: True when some bytes did not decode and were replaced. Such a side is
     #: never editable as text: saving it would write the replacements back.
     lossy: bool = False
@@ -109,6 +160,10 @@ class Loaded:
             name += " BOM"
         if self.guessed:
             name += " (guess)"
+        elif self.forced:
+            name += " (chosen)"
+        elif self.detected:
+            name += " (detected)"
         parts = [name]
         if self.eol:
             parts.append(self.eol)
@@ -116,9 +171,10 @@ class Loaded:
         return "  ·  ".join(parts)
 
 
-def load(path: str, *, max_bytes: int = MAX_BYTES) -> Loaded:
+def load(path: str, *, max_bytes: int = MAX_BYTES, encoding: str = "") -> Loaded:
     """Read and decode one file. Never raises: a failure is a `Loaded` that
-    says why, which is what the side's header shows."""
+    says why, which is what the side's header shows. `encoding` reads it as
+    that instead of working one out."""
     out = Loaded(path=path)
     target = longpath.api(path)
     try:
@@ -149,21 +205,28 @@ def load(path: str, *, max_bytes: int = MAX_BYTES) -> Loaded:
     except OSError as exc:
         out.error = _reason(exc)
         return out
-    decode_into(out, data)
+    decode_into(out, data, encoding=encoding)
     return out
 
 
-def decode_into(out: Loaded, data: bytes) -> None:
+def decode_into(out: Loaded, data: bytes, *, encoding: str = "") -> None:
     """The ladder, on bytes already read. Separate so the tests can feed it
     bytes without touching a disk."""
     out.size = out.size or len(data)
     out.data = data if len(data) <= KEEP_BYTES else None
     out.digest = hashlib.blake2b(data, digest_size=16).hexdigest()
+    if encoding:
+        _decode_as(out, data, encoding)
+        return
     encoding, bom = _sniff(data)
     if encoding is None:
-        out.ok = True
-        out.binary = True
-        return
+        wide = detect.utf16(data)
+        if wide is None:
+            out.ok = True
+            out.binary = True
+            return
+        encoding, bom = wide, b""
+        out.detected = True
     body = data[len(bom):] if bom else data
     out.bom = bool(bom)
     text: str
@@ -172,18 +235,59 @@ def decode_into(out: Loaded, data: bytes) -> None:
             text = body.decode("utf-8")
             encoding = "ascii" if body.isascii() else "utf-8"
         except UnicodeDecodeError:
-            try:
-                text = body.decode("cp1252")
-                encoding = "cp1252"
-            except UnicodeDecodeError:
-                text = body.decode("latin-1")
-                encoding = "latin-1"
-                out.guessed = True
+            page = detect.detect(body)
+            if page is not None and page != "cp1252":
+                text = body.decode(page)
+                encoding = page
+                out.detected = True
+            else:
+                try:
+                    text = body.decode("cp1252")
+                    encoding = "cp1252"
+                except UnicodeDecodeError:
+                    text = body.decode("latin-1")
+                    encoding = "latin-1"
+                    out.guessed = True
     else:
         try:
             text = body.decode(encoding)
         except UnicodeDecodeError:
             text = body.decode(encoding, errors="replace")
+            out.lossy = True
+    out.encoding = encoding
+    out.lines, out.endings = split(text)
+    out.eol = eol_style(out.endings)
+    out.ok = True
+
+
+def _decode_as(out: Loaded, data: bytes, encoding: str) -> None:
+    """Read as the encoding somebody chose. A mark that belongs to it is
+    taken off and kept; bytes it cannot decode are replaced and the side is
+    marked lossy, so it is never saved back over the file."""
+    out.forced = True
+    body = data
+    for mark, name in _BOMS:
+        if data.startswith(mark) and (name == encoding or (
+                name.startswith("utf-16") and encoding == "utf-16")):
+            body = data[len(mark):]
+            out.bom = True
+            break
+    try:
+        text = body.decode(encoding)
+    except UnicodeDecodeError:
+        text = body.decode(encoding, errors="replace")
+        out.lossy = True
+    except LookupError:
+        out.error = f"Unknown encoding: {encoding}"
+        return
+    if encoding not in ("utf-8", "utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be",
+                        "latin-1") and not out.lossy:
+        # A multi-byte page can decode two byte sequences to one character;
+        # only one that gives the same bytes back may be edited and saved.
+        try:
+            if text.encode(encoding) != body:
+                out.lossy = True
+        except UnicodeEncodeError:
             out.lossy = True
     out.encoding = encoding
     out.lines, out.endings = split(text)

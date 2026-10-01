@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.2.0 - code pages, and Read as
+
+- **Files in other code pages are read as what they are.** A file that is
+  not UTF-8 used to be read as Windows-1252 whatever it held -- right for
+  English, German, French and Spanish, and quietly wrong for a Czech, Polish,
+  Russian, Greek, Turkish, Baltic, Japanese, Chinese or Korean file, or a DOS
+  tool's report: wrong letters on screen, and a compare marking the wrong
+  words. Now the lines with non-ASCII bytes are read under each likely code
+  page and the one whose words read as words is used: Windows-1250, 1251,
+  1253, 1254, 1257, DOS 437, 850 and 866, Shift JIS, Big5, EUC-KR and
+  GB18030. The header says "(detected)".
+- **Western files are read exactly as before.** Windows-1252 is kept unless
+  it reads the file's words as nonsense, and one stray byte is not enough to
+  switch.
+- **UTF-16 without a byte order mark** in Chinese, Japanese or Korean opens
+  as text rather than as binary.
+- **Read as** on each side's menu reads the file again as any of seventeen
+  encodings, or back to working it out. The header says "(chosen)". Unsaved
+  edits on that side are asked about first.
+- A detected or chosen file saves back in the same encoding, byte for byte;
+  the encoding it was read in is always on the "Save with encoding" list. A
+  multi-byte encoding that would not give the same bytes back makes the side
+  read-only rather than risk a save.
+- No new dependency: charset-normalizer was tried and read ordinary Western
+  files as Baltic, so the detection is our own.
+
 ## 1.1.0 - syntax colour
 
 - **Text is coloured by its language**, found from the file's name: about

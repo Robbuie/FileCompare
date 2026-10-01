@@ -173,10 +173,10 @@ def test_a_slow_side_times_out_and_its_late_answer_is_dropped(qt_app, monkeypatc
 
     real = core.open_side
 
-    def slow(path, max_bytes):
+    def slow(path, max_bytes, encoding=""):
         if path.endswith("right.ini"):
             time.sleep(0.6)
-        return real(path, max_bytes)
+        return real(path, max_bytes, encoding)
 
     monkeypatch.setattr(core, "open_side", slow)
     s = make_session(os.path.join(DATA, "settings.left.ini"),

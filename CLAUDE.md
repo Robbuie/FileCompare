@@ -168,7 +168,11 @@ Holds what the UI renders.
 **`app/io/`** -- every real filesystem call, off the UI thread.
 
 - `io/load.py` -- read a file, detect encoding, BOM and line endings, return
-  the decoded lines, the endings, a hash of the bytes and what was detected.
+  the decoded lines, the endings, a hash of the bytes and what was detected;
+  or read it as a named encoding (the side's "Read as").
+- `io/detect.py` -- which code page a file that is not UTF-8 is in (1.2):
+  the non-ASCII lines only, each candidate judged by whether its words are
+  words in one script, Windows-1252 kept unless it reads badly. Pure.
 - `io/kind.py` -- file, folder or missing, for a path from the command line.
 - `io/longpath.py` -- the `\\?\` rule, ported from File Manager's `paths.py`.
 - `io/save.py` -- encode with the side's encoding, mark and per-line
@@ -291,6 +295,13 @@ This is where compare tools quietly damage files. The rules:
   ending style are detected per side on load and recorded on the session. A
   save writes that encoding, that BOM, and that line ending, unless somebody
   changed one on purpose in the status bar.
+- **A code page is detected, never assumed past Windows-1252** (1.2). A file
+  that is not UTF-8 is Windows-1252 unless `io/detect.py` finds that 1252
+  reads its words as nonsense and another page reads them cleanly; the
+  header says "(detected)", and the side's **Read as** menu reads it as any
+  other page ("(chosen)"). A multi-byte page is only accepted, detected or
+  chosen, when it encodes back to the same bytes; otherwise the side is
+  lossy and read-only.
 - **A file that does not decode cleanly is not editable as text.** It opens
   read-only as text with the undecodable bytes shown, or in hex. Editing a
   decode that contains U+FFFD and saving it would replace real bytes with
@@ -554,6 +565,15 @@ made in a worker, not in the argument parser.
   `stripnl=False` -- its default strips leading blank lines and every span
   after them lands one row high. A side shown by its structure is not
   coloured: those are lines this application wrote.
+- **Detection is tuned against the cases that matter, and the tests hold
+  it there.** `test_encodings.py` runs every page dense, sparse (one line
+  of it in a page of ASCII) and as a single line, plus ordinary Western
+  text that must stay 1252. A change to `detect.judge` that fixes one page
+  by breaking 1252 shows up there first. Two rules that were learned: a
+  page other than 1252 needs `EVIDENCE` clean characters before it is
+  chosen (one stray `0x81` is not a DOS file), and UTF-16 without a mark
+  must have spaces or line breaks in it and be mostly letters (a repeating
+  binary pattern decodes as UTF-16 too).
 - **A file can change under an open tab.** Poll the two files on an interval
   (not a watcher; SMB change notification is unreliable) and offer a reload
   when one changes. Never reload over unsaved edits without asking.
@@ -602,7 +622,11 @@ made in a worker, not in the argument parser.
 - **Folder sync actions** -- decided (1.0): handed to File Manager's queue.
 - **Dependencies** -- approved 2026-09-30: `Pygments` (syntax colour, 1.1),
   `charset-normalizer` (encodings beyond BOM and UTF-8), `openpyxl` (Excel
-  tables). `Pillow` was never needed. Anything past these is asked again.
+  tables). `Pillow` was never needed. `charset-normalizer` was tried for 1.2
+  and **not used**: on mostly-ASCII files with a few accented words it read
+  ordinary Windows-1252 as Baltic or Central European, so `io/detect.py`
+  does the job instead (see its docstring). Anything past these is asked
+  again.
 
 ## Packaging and releasing
 

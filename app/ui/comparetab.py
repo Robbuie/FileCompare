@@ -801,6 +801,12 @@ class CompareTab(QWidget):
             QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Cancel)
         return answer == QMessageBox.Discard
 
+    def _read_as(self, index: int, encoding: str) -> None:
+        side = self.session.sides[index]
+        if side.dirty and not self._confirm_discard("Read as"):
+            return
+        self.session.read_as(index, encoding)
+
     def _side_menu(self, index: int) -> None:
         s = self.session
         side = s.sides[index]
@@ -809,8 +815,29 @@ class CompareTab(QWidget):
         save.setEnabled(side.editable and (side.dirty or s.encoding_changed(index)))
         menu.addAction("Save as...", lambda: self.save_side_as(index)).setEnabled(side.doc is not None)
         menu.addSeparator()
+        reading = menu.addMenu("Read as")
+        auto = reading.addAction("Work it out" + (
+            f"  ({io_load.label(side.loaded.encoding)})"
+            if side.loaded is not None and not side.read_as and side.loaded.encoding else ""))
+        auto.setCheckable(True)
+        auto.setChecked(not side.read_as)
+        auto.triggered.connect(lambda _c=False: self._read_as(index, ""))
+        reading.addSeparator()
+        for label, encoding in io_load.READ_AS:
+            action = reading.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(side.read_as == encoding)
+            action.triggered.connect(lambda _c=False, e=encoding: self._read_as(index, e))
+        reading.setEnabled(bool(side.path) and side.loaded is not None
+                           and not side.loaded.binary or bool(side.read_as))
         encodings = menu.addMenu("Save with encoding")
-        for label, encoding, bom in SAVE_ENCODINGS:
+        choices = list(SAVE_ENCODINGS)
+        if side.encoding and side.encoding not in ("ascii",) and not any(
+                (side.encoding, side.bom) == (e, b) for _l, e, b in choices):
+            # The encoding it was read in is always one it can be saved in.
+            choices.insert(0, (io_load.label(side.encoding) + (" with BOM" if side.bom else ""),
+                               side.encoding, side.bom))
+        for label, encoding, bom in choices:
             action = encodings.addAction(label)
             action.setCheckable(True)
             action.setChecked((side.encoding, side.bom) == (encoding, bom)
