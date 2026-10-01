@@ -39,7 +39,6 @@ import trim  # noqa: E402
     "PySide6/Qt6VirtualKeyboard.dll",
     "PySide6/plugins/platforminputcontexts/qtvirtualkeyboardplugin.dll",
     "PySide6/Qt6OpenGL.dll",
-    "PySide6/QtNetwork.pyd",
     "PySide6/plugins/tls/qopensslbackend.dll",
     "PySide6/plugins/tls/qschannelbackend.dll",
     "PySide6/plugins/networkinformation/qnetworklistmanager.dll",
@@ -139,6 +138,26 @@ def test_the_pdf_plugin_keeps_the_network_library_it_links_to():
     # Qt6Network.dll. The binding goes; the library stays.
     assert trim.keep("PySide6/Qt6Network.dll")
     assert trim.keep("PySide6/Qt6Pdf.dll")
-    assert not trim.keep("PySide6/QtNetwork.pyd")
+    assert trim.keep("PySide6/QtNetwork.pyd")     # 1.4.3: QLocalServer
     assert not trim.keep("PySide6/Qt6QmlMeta.dll")
     assert not trim.keep("PySide6/Qt6QmlWorkerScript.dll")
+
+
+def test_every_qt_module_the_application_imports_is_shipped():
+    # 1.4.3: the first installer ever built died on start because the trim
+    # list, copied from File Manager, dropped QtNetwork -- which this
+    # application uses for its single window. Every PySide6 module imported
+    # anywhere under app/ must survive both the spec's exclusions and the trim.
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    used = set()
+    for path in (root / "app").rglob("*.py"):
+        used |= set(re.findall(r"PySide6\.(Qt\w+)", path.read_text(encoding="utf-8")))
+    assert {"QtCore", "QtGui", "QtWidgets", "QtNetwork"} <= used
+    spec = (root / "packaging" / "filecompare.spec").read_text(encoding="utf-8")
+    for module in sorted(used):
+        assert f'"PySide6.{module}"' not in spec, f"the spec excludes {module}"
+        assert trim.keep(f"PySide6/{module}.pyd"), f"trim drops {module}"
+        assert trim.keep(f"PySide6/Qt6{module[2:]}.dll"), f"trim drops Qt6{module[2:]}"

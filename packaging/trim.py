@@ -85,18 +85,21 @@ EXCLUDE_FILES = frozenset({
     # spec's module exclusions; this is the library they would have used.
     "pyside6/qt6opengl.dll",
 
-    # Qt's networking from Python, which this application does not do: the
-    # one network call it makes is `app/core/updates.py`, and that is `urllib`
-    # on a thread. The binding goes; **the library stays** (1.4.2, as File
-    # Manager 0.45.1). Qt6Pdf links to Qt6Network.dll, and image compare reads
-    # whatever QImage can, PDF included; the link check in build.py refused the
-    # 1.4.1 build for exactly this.
+    # Qt's TLS and network-status plugins. **QtNetwork itself stays, binding
+    # and library** (1.4.3): unlike File Manager, which finds its running
+    # window through a Windows pipe, this application does it through
+    # `QLocalServer` (`core/instance.py`), and that is QtNetwork. File
+    # Manager's list dropped `qtnetwork.pyd`; copied here, it made every
+    # installed build fail on start with "No module named PySide6.QtNetwork"
+    # -- found on the first installer that was ever built. Qt6Pdf links to
+    # Qt6Network.dll as well (1.4.2). A local socket needs no TLS, so the
+    # plugins below still go; `test_trim.py` now checks every Qt module the
+    # application imports against this list.
     #
     # `libcrypto-3.dll` and `libssl-3.dll` are NOT here and must not be: they
     # sit at the root of `_internal` beside `_ssl.pyd` and `_hashlib.pyd`
     # rather than in `PySide6/`, because they are *Python's* OpenSSL. They are
     # what the update check's HTTPS and its SHA-256 verification run on.
-    "pyside6/qtnetwork.pyd",
     "pyside6/plugins/tls/qcertonlybackend.dll",
     "pyside6/plugins/tls/qopensslbackend.dll",
     "pyside6/plugins/tls/qschannelbackend.dll",

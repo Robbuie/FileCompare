@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.3 - the installed app starts
+
+- **1.4.2 installed but would not start**: "No module named
+  PySide6.QtNetwork". File Compare finds its already-open window through a
+  local socket, which is Qt's networking module, and the installer's list of
+  Qt parts to leave out -- copied from File Manager, which finds its window
+  another way -- removed it. 1.4.2 was the first installer ever built, which
+  is why it had not shown before. The module is shipped again, and a test now
+  checks every Qt module the application uses against that list, so a build
+  that leaves one out fails before it is released.
+- A 1.4.2 install cannot update itself, since it cannot start: run the
+  1.4.3 setup over it.
+
 ## 1.4.2 - the installer builds again
 
 - The release build for 1.4.1 stopped at its own safety check: Qt's PDF
