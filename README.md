@@ -32,7 +32,8 @@ than by row.
 - **Logix exports (.L5X)** by structure: export dates ignored, tags and
   programs sorted, rung numbers kept out of the way, and every difference
   named by program, routine and rung. XML, JSON and INI by structure too.
-- **CSV tables** matched on a key column, compared cell by cell.
+- **CSV tables and Excel workbooks** matched on a key column, compared cell
+  by cell; a workbook one sheet at a time, values or formulas.
 - **Hex** for binary files, aligned by offset. **Images** side by side,
   overlay, swipe, blink and difference, with a tolerance.
 - **Three-way merge** with git's `mergetool` exit codes.

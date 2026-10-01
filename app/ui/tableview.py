@@ -140,6 +140,18 @@ class TableView(QWidget):
         self.key = QComboBox()
         self.key.setToolTip("The column that says which rows are the same record")
         self.key.activated.connect(self._key_chosen)
+        # 1.3: workbooks. The sheet, matched by name, and values or formulas.
+        self.sheet_label = QLabel("Sheet")
+        self.sheet = QComboBox()
+        self.sheet.setToolTip("The sheet compared. Sheets are matched by name; the "
+                              "list says which differ.")
+        self.sheet.activated.connect(self._sheet_chosen)
+        self.sheet.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.key.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.formulas = self._toggle("Formulas", False, "formulas")
+        self.formulas.setToolTip("Compare what was typed in each cell rather than "
+                                 "the value Excel last calculated")
+        self.note = ""
         self.header = self._toggle("First row is names", True, "header")
         self.case = self._toggle("Ignore case", False, "ignore_case")
         self.numbers = self._toggle("Numbers by value", True, "numeric")
@@ -157,11 +169,13 @@ class TableView(QWidget):
         seg = QHBoxLayout(segments)
         seg.setContentsMargins(2, 2, 2, 2)
         seg.setSpacing(2)
-        for button in (self.only, self.header, self.case, self.numbers):
+        for button in (self.only, self.header, self.case, self.numbers, self.formulas):
             seg.addWidget(button)
         bar = QHBoxLayout()
         bar.setContentsMargins(8, 6, 8, 6)
         bar.setSpacing(6)
+        bar.addWidget(self.sheet_label)
+        bar.addWidget(self.sheet)
         bar.addWidget(QLabel("Key"))
         bar.addWidget(self.key)
         bar.addWidget(segments)
@@ -176,6 +190,32 @@ class TableView(QWidget):
         box.addWidget(top)
         box.addWidget(self.line)
         box.addWidget(self.grid, 1)
+        self.set_workbook(False)
+
+    def set_workbook(self, on: bool) -> None:
+        """Show the sheet list and the Formulas switch for a workbook pair."""
+        for widget in (self.sheet_label, self.sheet, self.formulas):
+            widget.setVisible(on)
+
+    def set_sheets(self, states, current: str, note: str = "") -> None:
+        """The sheet list, each name saying whether it differs."""
+        self.note = note
+        self.sheet.blockSignals(True)
+        self.sheet.clear()
+        for state in states:
+            if not state.left:
+                tag = "right only"
+            elif not state.right:
+                tag = "left only"
+            else:
+                tag = "same" if state.same else "differs"
+            self.sheet.addItem(f"{state.name}  ({tag})", state.name)
+        at = self.sheet.findData(current)
+        self.sheet.setCurrentIndex(max(0, at))
+        self.sheet.blockSignals(False)
+
+    def _sheet_chosen(self, index: int) -> None:
+        self._change(sheet=self.sheet.itemData(index) or "", key=None)
 
     def _toggle(self, label: str, on: bool, field: str) -> QPushButton:
         button = QPushButton(label)
@@ -232,7 +272,10 @@ class TableView(QWidget):
             parts.append("no differences")
         matched = "by position" if r.key == T.POSITION else f"matched on {r.columns[r.key].name}"
         text = "  ·  ".join(parts) + f"  ·  {matched}"
-        return text + (f"  ·  {r.key_problem}" if r.key_problem else "")
+        if self.sheet.isVisibleTo(self) and self.sheet.currentData():
+            text = f"{self.sheet.currentData()}  ·  " + text
+        text += f"  ·  {r.key_problem}" if r.key_problem else ""
+        return text + (f"  ·  {self.note}" if self.note else "")
 
     def step(self, direction: int) -> None:
         rows = [i for i in range(self.model.rowCount())

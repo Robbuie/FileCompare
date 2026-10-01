@@ -61,6 +61,25 @@ def _syntax_job(lines: list[str], key: str):
     return lines, syntax.highlight(lines, key)
 
 
+def _workbook_job(left: bytes, right: bytes, options):
+    """In the loader: both workbooks read (once each; `workbook.read` keeps
+    them), the sheet chosen, and compared like two CSV files."""
+    from dataclasses import replace
+
+    from app.core import tables, workbook
+
+    empty = workbook.Book([], {}, {})
+    books = [workbook.read(data, formulas=options.formulas) if data else empty
+             for data in (left, right)]
+    states = workbook.sheet_states(*books)
+    sheet = options.sheet if any(s.name == options.sheet for s in states) \
+        else workbook.first_different(states)
+    sides = [workbook.table(book, sheet, header=options.header) for book in books]
+    notes = sorted({book.cut[sheet] for book in books if sheet in book.cut})
+    result = tables.compare(sides[0], sides[1], replace(options, sheet=sheet))
+    return result, states, sheet, "; ".join(notes)
+
+
 def _table_job(left: list[str], right: list[str], options):
     from app.core import tables
 
@@ -1006,6 +1025,11 @@ class CompareTab(QWidget):
             if all(tables.is_table(side.path) or not side.path for side in s.sides):
                 out.append("table")
         if all(l is not None and l.data is not None for l in loaded):
+            from app.core import workbook
+
+            if all(workbook.is_workbook(side.path) or not side.path for side in s.sides) \
+                    and any(side.path for side in s.sides):
+                out.append("table")
             out.append("hex")
             if all(imagediff.is_image(side.path) or not side.path for side in s.sides):
                 out.append("image")
@@ -1115,13 +1139,29 @@ class CompareTab(QWidget):
     def _show_table(self) -> None:
         self.stack.setCurrentWidget(self.table)
         key = tuple(side.doc.revision if side.doc else -1 for side in self.session.sides) + \
-            tuple(id(side.doc) for side in self.session.sides)
+            tuple(id(side.doc) for side in self.session.sides) + \
+            tuple(side.loaded.digest if side.loaded else "" for side in self.session.sides)
         if self._table_for != key:
             self._table_for = key
             self._measure_table()
 
+    def _is_workbook_pair(self) -> bool:
+        from app.core import workbook
+
+        sides = self.session.sides
+        return any(side.path for side in sides) and all(
+            workbook.is_workbook(side.path) or not side.path for side in sides)
+
     def _measure_table(self) -> None:
         s = self.session
+        if self._is_workbook_pair():
+            self.table.set_workbook(True)
+            data = [side.loaded.data if side.loaded is not None and side.path else b""
+                    for side in s.sides]
+            self._table_request = s._loader.submit(_workbook_job, data[0], data[1],
+                                                   self.table.options)
+            return
+        self.table.set_workbook(False)
         self._table_request = s._loader.submit(
             _table_job, list(s.sides[0].lines), list(s.sides[1].lines), self.table.options)
 
@@ -1155,6 +1195,11 @@ class CompareTab(QWidget):
             self._hex_for = key
             self._hex_request = self.session._loader.submit(hexdiff.compare, *data)
             self._hex_data = data
+            from app.core import workbook
+
+            if any(workbook.is_old_workbook(side.path) for side in self.session.sides):
+                self.status.emit("An old .xls workbook is compared as bytes. Saved as "
+                                 ".xlsx it compares as a table, sheet by sheet.")
 
     def _show_images(self) -> None:
         self.stack.setCurrentWidget(self.images)
@@ -1214,7 +1259,12 @@ class CompareTab(QWidget):
         if request == self._table_request:
             self._table_request = 0
             if envelope.ok:
-                self.table.set_result(envelope.value)
+                value = envelope.value
+                if isinstance(value, tuple):          # a workbook pair
+                    result, states, sheet, note = value
+                    self.table.set_sheets(states, sheet, note)
+                    value = result
+                self.table.set_result(value)
                 self._update_position()
             else:
                 self.status.emit(f"Could not read as a table: {envelope.error}")

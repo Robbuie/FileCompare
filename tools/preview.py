@@ -55,7 +55,9 @@ def settle(app, window, seconds: float = 10.0) -> None:
     while time.monotonic() < end:
         app.processEvents()
         tabs = [window.pages.widget(i) for i in range(window.pages.count())]
-        busy = [t for t in tabs if isinstance(t, CompareTab) and t.session.kind == WAITING]
+        busy = [t for t in tabs if isinstance(t, CompareTab) and (
+            t.session.kind == WAITING or t._table_request or t._hex_request
+            or t._image_request or any(t._syntax_requests))]
         if not busy:
             break
         time.sleep(0.02)

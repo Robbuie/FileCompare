@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.3.0 - Excel workbooks
+
+- **Two Excel workbooks open as a table**, like two CSV files: records
+  matched on a key column wherever they are, columns matched by their names,
+  each changed cell showing `old -> new`. `.xlsx`, `.xlsm`, `.xltx` and
+  `.xltm`.
+- **One sheet at a time.** The Sheet list names every sheet in either
+  workbook and says which are the same, which differ, and which are on one
+  side only; the comparison opens on the first that differs.
+- Cells are compared as they read: 12 not 12.0, a date as 2026-09-30, TRUE
+  and FALSE. A sheet starts at its first row with anything in it, so a
+  title row and blank lines above the names do not get in the way.
+- **Formulas** compares what was typed in each cell instead of the value
+  Excel last calculated, so a formula that changed but gives the same answer
+  still shows.
+- "First row is names", "Ignore case", "Numbers by value", the key and
+  "Differences only" work as they do for CSV.
+- Very large sheets are compared up to 200,000 rows and 500 columns, and
+  say so. An old `.xls` workbook is compared as bytes, with a line saying
+  that saved as `.xlsx` it compares as a table.
+- New dependency: openpyxl (MIT licence), in the installer.
+
 ## 1.2.0 - code pages, and Read as
 
 - **Files in other code pages are read as what they are.** A file that is

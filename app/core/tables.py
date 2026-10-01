@@ -132,6 +132,10 @@ class Options:
     trim: bool = True
     #: "1.50" and "1.5" are the same number.
     numeric: bool = True
+    #: 1.3, workbooks: the sheet compared ("" for the first that differs),
+    #: and whether cells are what was typed rather than what was calculated.
+    sheet: str = ""
+    formulas: bool = False
 
 
 def columns_of(left: Table, right: Table) -> list[Column]:

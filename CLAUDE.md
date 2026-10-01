@@ -143,6 +143,9 @@ Holds what the UI renders.
   there; QPixmap is not).
 - `core/tables.py` -- CSV table compare: sniffed delimiter, columns matched
   by name, rows matched on a key column chosen automatically. Pure.
+- `core/workbook.py` -- Excel workbooks (1.3) through openpyxl: every sheet
+  read once into `tables.Table`s, cells as a person reads them, values or
+  formulas, sheets matched by name. Runs in the loader.
 - `core/syntax.py` -- syntax colour (1.1): the language from the file's
   name, Pygments' lexers plus our own for L5K and Structured Text, and per
   line `(start, stop, category)` spans in display columns. `theme/syntax.py`
@@ -268,9 +271,11 @@ compare panel, so the two read as the same tool.
 Conflicts are their own kind with their own navigation. This is also what
 makes the app usable as git's `mergetool`.
 
-**Table** -- CSV and, if approved, Excel: rows matched on a key column rather
-than by position, so an inserted row is one difference and not every row
-after it.
+**Table** -- CSV and (1.3) Excel `.xlsx`/`.xlsm`: rows matched on a key
+column rather than by position, so an inserted row is one difference and not
+every row after it. A workbook pair compares one sheet at a time, chosen by
+name from a list that says which differ; cells are the values Excel saved,
+or the formulas. The old binary `.xls` is compared as bytes and says why.
 
 **Format-aware** (normalise, then text compare):
 - **L5X (Logix exports)** -- ignore `ExportDate` and other attributes that
@@ -574,6 +579,14 @@ made in a worker, not in the argument parser.
   chosen (one stray `0x81` is not a DOS file), and UTF-16 without a mark
   must have spaces or line breaks in it and be mostly letters (a repeating
   binary pattern decodes as UTF-16 too).
+- **A workbook is binary to the reader and a table to the tab.** `io/load`
+  keeps its bytes (up to `KEEP_BYTES`), the session calls it BINARY, and the
+  tab's table view reads those bytes through `core/workbook.py` in the
+  loader -- never `side.lines`, which a binary side does not have. A
+  workbook's cells are the values Excel calculated *when it last saved*: a
+  file written by a script and never opened in Excel has none, which is
+  what "Formulas" is for. `workbook.read` is cached on the bytes, so
+  changing the key or a toggle does not parse the file again.
 - **A file can change under an open tab.** Poll the two files on an interval
   (not a watcher; SMB change notification is unreliable) and offer a reload
   when one changes. Never reload over unsaved edits without asking.
