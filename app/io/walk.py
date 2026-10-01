@@ -110,13 +110,15 @@ def same_bytes(left: str, right: str, cancel: threading.Event | None = None) -> 
                 return True
 
 
-def compare_contents(pairs: list[tuple[int, str, str]], progress: Progress) -> list[tuple[int, bool | None, str]]:
+def compare_contents(pairs: list[tuple[int, str, str]],
+                     progress: Progress | None = None) -> list[tuple[int, bool | None, str]]:
     """`(key, left, right)` for each pair; `(key, same, error)` back.
 
     One job for the whole batch rather than one per pair: a thousand queued
     jobs would each wait behind the other tabs' reads, and one job reports
     progress through the same object as the walk.
     """
+    progress = progress or Progress()
     out = []
     for key, left, right in pairs:
         if progress.cancelled:

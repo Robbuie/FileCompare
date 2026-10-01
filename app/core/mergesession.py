@@ -52,8 +52,8 @@ class MergeSession(QObject):
 
     def start(self) -> None:
         for name in NAMES:
-            self._requests[self._loader.submit(open_side, self.paths[name],
-                                               self.max_bytes)] = name
+            self._requests[self._loader.submit_io(self.paths[name], open_side,
+                                                  self.paths[name], self.max_bytes)] = name
 
     @property
     def problem(self) -> str:

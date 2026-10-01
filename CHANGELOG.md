@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.0 - a dead share can be stopped
+
+- **Reads, folder walks and change checks on a network share run in a
+  process of their own**, one per server. When one misses its deadline the
+  side says "not answering" as before -- and now the process holding it is
+  stopped and a new one starts on the next read, rather than a thread
+  staying stuck in Windows' network call until Windows gives up.
+- That matters most for a share that goes away while tabs are open: each
+  tab checks every few seconds whether its files changed, and those checks
+  could take every thread File Compare had, after which comparisons,
+  colouring and reads in every tab queued behind them. They no longer can.
+- Local disks are unchanged: they stay on threads, with no process to start.
+- A folder compare on a share shows its file count as it walks, as before,
+  and Stop still stops it.
+
 ## 1.3.0 - Excel workbooks
 
 - **Two Excel workbooks open as a table**, like two CSV files: records

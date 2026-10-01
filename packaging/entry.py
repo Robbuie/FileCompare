@@ -1,10 +1,9 @@
 """The frozen entry point. It exists for one line.
 
-Ported from File Manager 0.40.0. Nothing in File Compare starts a process
-yet, but folder compare is where File Manager's worker pool is meant to be
-ported (CLAUDE.md), and the pool starts its processes with multiprocessing's
-spawn context, which re-launches this executable and imports its way back to
-the child function. In a PyInstaller build there is no `-m` and
+Ported from File Manager 0.40.0. Since 1.4 File Compare reads files and
+walks folders on a share in worker processes (`app/io/pool.py`), started with
+multiprocessing's spawn context, which re-launches this executable and
+imports its way back to the child function. In a PyInstaller build there is no `-m` and
 no script to import: without `freeze_support()` the child re-runs the entry
 point instead, and every worker would open another File Compare window, which opens
 more workers. Called first, it recognises a spawned child, runs the child, and

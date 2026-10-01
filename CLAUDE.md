@@ -184,9 +184,10 @@ Holds what the UI renders.
   followed, cancellable; and "are these two files the same bytes".
 - `io/handoff.py` -- write a sync request, start `FileManager.exe --queue`,
   read the result File Manager writes beside it.
-- Later, if dead shares make it worth it: `io/worker.py` / `io/pool.py`
-  ported from File Manager, so a walk stuck in SMB can be killed rather than
-  abandoned.
+- `io/read.py` -- opening a side (what the path is, its text), here so a
+  worker process can run it without importing Qt.
+- `io/pool.py` / `io/volume.py` -- worker processes per network volume, and
+  which volume a path is on (1.4).
 
 ### The row model
 
@@ -208,18 +209,23 @@ What follows from that:
   with filler lines and does not survive a 200 MB log, so it is not used for
   the compare view.
 
-### Threads now, worker processes later
+### Threads for work, processes for shares (1.4)
 
 Each side loads independently, off the UI thread, under a deadline
 (`load.timeout`). A side that misses it shows "not answering" with a Retry,
 the other side stays usable, and the late answer is dropped by request id.
 
-In 0.1 the loads run on a small thread pool (`core/loader.py`), not in File
-Manager's per-volume worker processes. The window behaves the same either way;
-the difference is that a thread stuck in an SMB call cannot be killed, so it
-stays stuck until Windows gives up. With a handful of threads and single-file
-reads that is a bounded cost. Folder compare walks whole trees on shares, and
-that is where File Manager's pool gets ported.
+Computation -- diffs, colour, tables, hex, images -- runs on the loader's
+small thread pool (`Loader.submit`). **Reads** go through
+`Loader.submit_io(path, fn, ...)`: on a local disk, the same threads; on a
+network volume (`io/volume.py`: a UNC server, or a letter `GetDriveType`
+calls remote), a worker process for that server (`io/pool.py`). A deadline
+missed calls `Loader.abandon(request)`, which kills the worker holding it --
+answering everything it held with "stopped answering" -- and the next read
+of that share starts a fresh one. That is what keeps stuck reads, and above
+all the every-three-seconds change checks of every open tab, from piling up
+on threads the rest of the window needs. Saves stay on threads: a save is
+asked for once, and a write is not something to kill half way.
 
 A ported file says at the top which File Manager version it was taken from, so
 a fix made there can be found and carried over. Ported so far:
@@ -587,6 +593,15 @@ made in a worker, not in the argument parser.
   file written by a script and never opened in Excel has none, which is
   what "Formulas" is for. `workbook.read` is cached on the bytes, so
   changing the key or a toggle does not parse the file again.
+- **A job for `submit_io` lives in `app/io/` and takes `progress=` by
+  name.** A worker process imports the job's module to run it, and a module
+  under `app/core/` or `app/ui/` brings Qt -- fifty megabytes and a fifth of
+  a second -- into every worker. The function goes by reference, so it must
+  be module-level; its arguments and its answer cross by pickle, so plain
+  data only. Progress comes back as messages a few times a second and is
+  copied into the caller's `Progress`; a cancel set on that object is
+  carried to the worker by the loader's watch timer. A test that wants a
+  process off a network sets `volume.FORCE_REMOTE`.
 - **A file can change under an open tab.** Poll the two files on an interval
   (not a watcher; SMB change notification is unreliable) and offer a reload
   when one changes. Never reload over unsaved edits without asking.

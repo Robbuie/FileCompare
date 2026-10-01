@@ -30,10 +30,6 @@ FAILED = "failed"
 SLOW = "not answering"
 
 
-def _walk_job(root: str, progress: io_walk.Progress) -> list[folders.Entry]:
-    return io_walk.walk(root, progress)
-
-
 def _build_job(left, right, mask, tolerance):
     return folders.build(left, right, mask=mask, tolerance=tolerance)
 
@@ -169,8 +165,8 @@ class FolderSession(QObject):
                  for i, node in self._content_nodes.items()]
         self.content = io_walk.Progress()
         self.content_total = len(pairs)
-        self._content_request = self._loader.submit(io_walk.compare_contents, pairs,
-                                                    self.content)
+        self._content_request = self._loader.submit_io(left_root, io_walk.compare_contents,
+                                                       pairs, progress=self.content)
         self._timer.start()
         self.changed.emit()
         return len(pairs)
@@ -269,7 +265,8 @@ class FolderSession(QObject):
         side.progress = io_walk.Progress()
         side.seen = -1
         side.still = 0.0
-        side.request = self._loader.submit(_walk_job, side.path, side.progress)
+        side.request = self._loader.submit_io(side.path, io_walk.walk, side.path,
+                                              progress=side.progress)
 
     def _tick(self) -> None:
         for side in self.sides:
@@ -282,6 +279,7 @@ class FolderSession(QObject):
             side.still += self.TICK
             if side.still >= self.timeout:
                 side.state = SLOW
+                self._loader.abandon(side.request)
                 side.request = 0
                 side.progress.cancel.set()
                 side.error = (f"Nothing new for {self.timeout:g} seconds. "

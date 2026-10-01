@@ -66,12 +66,10 @@ SYNC_LINES = 40_000
 POLL_SECONDS = 3.0
 
 
-def open_side(path: str, max_bytes: int, encoding: str = "") -> tuple[str, io_load.Loaded | None]:
-    """The worker's half: what the path is, and its text if it is a file."""
-    what = io_kind.kind(path)
-    if what != io_kind.FILE:
-        return what, None
-    return what, io_load.load(path, max_bytes=max_bytes, encoding=encoding)
+# The worker's half of opening a side. In `app/io/read.py` since 1.4, so a
+# worker process for a share does not import Qt to run it; named here too,
+# because this is where the session looks it up.
+from app.io.read import open_side  # noqa: E402
 
 
 def save_side(path: str, lines: list[str], endings: list[str], encoding: str, bom: bool,
@@ -441,7 +439,7 @@ class Session(QObject):
             if side.state != READY or side.kind != io_kind.FILE or side.disk is None \
                     or side.saving or index in self._probe_requests.values():
                 continue
-            request = self._loader.submit(io_save.probe, side.path)
+            request = self._loader.submit_io(side.path, io_save.probe, side.path)
             self._probe_requests[request] = index
 
     def _probe_done(self, index: int, envelope: Envelope) -> None:
@@ -479,8 +477,8 @@ class Session(QObject):
         side.state = LOADING
         side.error = ""
         side.doc = None
-        side.request = self._loader.submit(open_side, side.path, self.options.max_bytes,
-                                           side.read_as)
+        side.request = self._loader.submit_io(side.path, open_side, side.path,
+                                              self.options.max_bytes, side.read_as)
         self.result = None
         self._compare_request = 0
         self._arm(index, side.request)
@@ -501,7 +499,11 @@ class Session(QObject):
         if side.request != request or side.state != LOADING:
             return
         side.state = SLOW
-        side.request = 0          # the answer, if it ever comes, is dropped
+        # On a share, the reader holding it is killed and restarted, so it
+        # does not stay stuck in the call; on a local disk the thread is left
+        # and its answer, if it ever comes, is dropped.
+        self._loader.abandon(request)
+        side.request = 0
         side.error = (f"No answer after {self.options.timeout:g} seconds. "
                       "The share may be unreachable.")
         self.changed.emit()
