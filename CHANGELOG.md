@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.2 - the installer builds again
+
+- The release build for 1.4.1 stopped at its own safety check: Qt's PDF
+  library, which image compare uses to read PDFs, needs Qt's networking
+  library, and the installer was leaving that out. It is kept now (about
+  1.7 MB), as File Manager has done since 0.45.1, and two unused pieces of
+  Qt's QML runtime that nothing could load are left out. This is 1.4.1 with
+  that fix; 1.4.1 never had an installer.
+
 ## 1.4.1 - sync and share fixes from a review
 
 - **A folder is only copied or removed whole when everything under it was

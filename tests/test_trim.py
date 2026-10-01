@@ -39,7 +39,6 @@ import trim  # noqa: E402
     "PySide6/Qt6VirtualKeyboard.dll",
     "PySide6/plugins/platforminputcontexts/qtvirtualkeyboardplugin.dll",
     "PySide6/Qt6OpenGL.dll",
-    "PySide6/Qt6Network.dll",
     "PySide6/QtNetwork.pyd",
     "PySide6/plugins/tls/qopensslbackend.dll",
     "PySide6/plugins/tls/qschannelbackend.dll",
@@ -133,3 +132,13 @@ def test_the_list_refuses_rather_than_allows():
     """
     assert trim.keep("PySide6/Qt6SomethingNew.dll")
     assert trim.keep("PySide6/plugins/imageformats/qbrandnew.dll")
+
+
+def test_the_pdf_plugin_keeps_the_network_library_it_links_to():
+    # 1.4.2: the link check refused the 1.4.1 build because Qt6Pdf.dll needs
+    # Qt6Network.dll. The binding goes; the library stays.
+    assert trim.keep("PySide6/Qt6Network.dll")
+    assert trim.keep("PySide6/Qt6Pdf.dll")
+    assert not trim.keep("PySide6/QtNetwork.pyd")
+    assert not trim.keep("PySide6/Qt6QmlMeta.dll")
+    assert not trim.keep("PySide6/Qt6QmlWorkerScript.dll")
