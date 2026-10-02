@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 class StartTab(QWidget):
     compareRequested = Signal(str, str)
     browsed = Signal(int, str)          # side, the folder browsed from
+    sessionRequested = Signal(str)      # 1.10: a .fcsession file to open
 
     def __init__(self, folders: tuple[str, str] = ("", ""),
                  parent: QWidget | None = None, *,
@@ -76,8 +77,13 @@ class StartTab(QWidget):
         hint = QLabel("From File Manager: Ctrl+F2 compares the two panes, "
                       "Alt+F2 the marked files.")
         hint.setProperty("role", "hint")
+        self.open_session = QPushButton("Open session")
+        self.open_session.setToolTip("A comparison saved with Ctrl+Alt+S: the same two paths, "
+                                     "rules, filter and pins")
+        self.open_session.clicked.connect(self._browse_session)
         buttons = QHBoxLayout()
         buttons.addWidget(hint, 1)
+        buttons.addWidget(self.open_session)
         buttons.addWidget(self.go)
 
         inner = QVBoxLayout(card)
@@ -152,6 +158,13 @@ class StartTab(QWidget):
             if not self.fields[1 - side].text().strip():
                 self.fields[1 - side].setFocus()
 
+    def _browse_session(self) -> None:
+        start = self._folders[0] or self._folders[1]
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "Open a saved session", start, "File Compare session (*.fcsession)")
+        if path:
+            self.sessionRequested.emit(path.replace("/", "\\"))
+
     # ------------------------------------------------------------ dropping
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt naming
@@ -164,6 +177,9 @@ class StartTab(QWidget):
         if not paths:
             return
         event.acceptProposedAction()
+        if len(paths) == 1 and paths[0].lower().endswith(".fcsession"):
+            self.sessionRequested.emit(paths[0])
+            return
         if len(paths) >= 2:
             self.set_paths(paths[0], paths[1])
             self._go()

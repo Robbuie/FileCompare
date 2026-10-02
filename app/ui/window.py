@@ -12,6 +12,9 @@ drop of two files on the window.
 
 from __future__ import annotations
 
+import ntpath
+from dataclasses import replace
+
 from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -30,11 +33,12 @@ from PySide6.QtWidgets import (
 
 from app import __version__
 from app.cli import Request
-from app.core import appearance, updates
+from app.core import appearance, formats, savedsession, updates
 from app.core.config import Config
 from app.core.loader import Loader
 from app.core.rules import WHITESPACE, Rules
 from app.core.session import Options, Session
+from app.io import sessionfile
 from app.theme import sheet
 from app.theme.tokens import ACCENT_LABELS, ACCENTS, DENSITIES, DENSITY_LABELS, THEME_LABELS, THEMES
 from app.ui import glyphs, winframe
@@ -64,6 +68,7 @@ Ctrl+C                    copy the selected lines
 Ctrl+A                    select every line
 Ctrl+F                    find; F3 / Shift+F3 next, previous
 Ctrl+Shift+H              save an HTML report or a patch
+Ctrl+Alt+S                save this comparison's setup as a session file
 Ctrl+U                    swap sides
 Ctrl+R                    compare again from disk
 Ctrl+I                    rules off and on
@@ -94,6 +99,9 @@ class MainWindow(QMainWindow):
         self._look = dict(look)
         self._look_source = look_source
         self._loader = Loader(self)
+        #: 1.10: session files being read, by request id.
+        self._session_files: dict[int, str] = {}
+        self._loader.finished.connect(self._loaded)
         self._tokens = sheet.tokens(**self._look)
         self._titlebar: TitleBar | None = None
         #: Set when a merge tab saved with nothing unresolved (git's answer).
@@ -242,6 +250,7 @@ class MainWindow(QMainWindow):
                          self._config.get("start.right_folder")), recent=recent)
         page.set_paths(left, right)
         page.compareRequested.connect(lambda l, r, p=page: self._start_to_compare(p, l, r))
+        page.sessionRequested.connect(self.open_session)
         page.browsed.connect(lambda side, folder: self._config.set(
             "start.left_folder" if side == 0 else "start.right_folder", folder))
         self._add_page(page)
@@ -263,7 +272,8 @@ class MainWindow(QMainWindow):
             self.tabs.moveTab(current, index)
 
     def _compare_page(self, left: str, right: str, *, titles=("", ""),
-                      readonly: set[str] | None = None, mode: str = "auto") -> CompareTab:
+                      readonly: set[str] | None = None, mode: str = "auto",
+                      saved=None) -> CompareTab:
         options = Options(
             rules=rules_from(self._config),
             intraline=self._config.get("compare.intraline"),
@@ -278,8 +288,19 @@ class MainWindow(QMainWindow):
             format="text" if mode == "text" else "auto",
             syntax="auto" if self._config.get("view.syntax") else "off",
         )
+        if saved is not None:
+            # 1.10: a session file's settings over the application's own.
+            options = replace(
+                options, rules=saved.rules, intraline=saved.intraline,
+                folder_show=saved.folder_show, **{name: value for name, value in (
+                    ("folder_mask", saved.folder_mask), ("folder_hour", saved.folder_hour),
+                    ("folder_by_content", saved.folder_by_content),
+                    ("folder_archives", saved.folder_archives)) if value is not None})
         session = Session(self._loader, left, right, options=options, titles=titles,
                           readonly=readonly)
+        if saved is not None:
+            session.structure = saved.structure and session.format_kind != formats.PLAIN
+            session.pins = list(saved.pins)
         self._remember(left, right)
         tab = CompareTab(session, self._tokens)
         tab.openPair.connect(lambda l, r: self.compare(l, r))
@@ -290,6 +311,28 @@ class MainWindow(QMainWindow):
         tab.setting.connect(self._config.set)
         session.start()
         return tab
+
+    def open_session(self, path: str) -> None:
+        """A .fcsession file (1.10): read off the UI thread, then opened as
+        the comparison it describes."""
+        request = self._loader.submit(sessionfile.read, path)
+        self._session_files[request] = path
+        self.flash(f"Opening the session {ntpath.basename(path)}...")
+
+    def _loaded(self, request: int, envelope) -> None:
+        path = self._session_files.pop(request, None)
+        if path is None:
+            return
+        if not envelope.ok:
+            reason = (envelope.error or "could not be read").split(": ", 1)[-1]
+            self.flash(f"{ntpath.basename(path)}: {reason}")
+            if not self.pages.count():
+                self.new_tab()
+            return
+        saved = envelope.value
+        tab = self.compare(saved.left, saved.right, titles=saved.titles,
+                           readonly=set(saved.readonly), mode=saved.mode, saved=saved)
+        tab.session_file = path
 
     def _remember(self, left: str, right: str) -> None:
         if not left or not right:
@@ -359,6 +402,9 @@ class MainWindow(QMainWindow):
             return
         if request.merge:
             self.merge(*request.paths[:3], output=request.output)
+            return
+        if len(request.paths) == 1 and savedsession.is_session(request.paths[0]):
+            self.open_session(request.paths[0])
             return
         if len(request.paths) == 2:
             self.compare(request.paths[0], request.paths[1],
@@ -556,6 +602,9 @@ class MainWindow(QMainWindow):
         if len(paths) >= 2:
             event.acceptProposedAction()
             self.compare(paths[0], paths[1])
+        elif len(paths) == 1 and savedsession.is_session(paths[0]):
+            event.acceptProposedAction()
+            self.open_session(paths[0])
         elif len(paths) == 1:
             event.acceptProposedAction()
             page = self.pages.currentWidget()

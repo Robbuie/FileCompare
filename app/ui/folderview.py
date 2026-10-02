@@ -267,6 +267,8 @@ class FolderTree(QTreeView):
             self.command.emit("reload")
         elif mods == Qt.ControlModifier and key == Qt.Key_C:
             self.command.emit("copy-path")
+        elif mods == (Qt.ControlModifier | Qt.AltModifier) and key == Qt.Key_S:
+            self.command.emit("save-session")
         else:
             super().keyPressEvent(event)
             return
@@ -621,7 +623,7 @@ class FolderView(QWidget):
             self._step(1)
         elif name == "previous":
             self._step(-1)
-        elif name in ("swap", "reload"):
+        elif name in ("swap", "reload", "save-session"):
             self.command.emit(name)
         elif name == "copy-path":
             paths = []

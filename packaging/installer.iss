@@ -75,6 +75,8 @@ RestartApplications=no
 ; Windows is told the environment changed, so programs started afterwards --
 ; File Manager, a new terminal, git -- find FileCompare.exe by name.
 ChangesEnvironment=yes
+; 1.10: .fcsession files open in File Compare, so a double-click is enough.
+ChangesAssociations=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -110,6 +112,13 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\{#AppEx
 ; `shutil.which` does -- File Manager's command rows, and git's difftool --
 ; reads only PATH. Added once, and removed again on uninstall.
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: NeedsAddPath(ExpandConstant('{app}'))
+
+; 1.10: saved sessions. A double-clicked .fcsession is the comparison it
+; describes. Per user, and only the one extension File Compare writes.
+Root: HKCU; Subkey: "Software\Classes\.fcsession"; ValueType: string; ValueName: ""; ValueData: "FileCompare.Session"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\FileCompare.Session"; ValueType: string; ValueName: ""; ValueData: "File Compare session"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\FileCompare.Session\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe},0"
+Root: HKCU; Subkey: "Software\Classes\FileCompare.Session\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
 
 ; Explorer's two verbs, off unless asked for: "Select left side" remembers a
 ; file or folder, "Compare to left side" opens the pair. Ordinary per-user

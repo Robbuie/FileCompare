@@ -323,6 +323,17 @@ or the formulas. The old binary `.xls` is compared as bytes and says why.
 - **XML** -- attribute order and insignificant whitespace ignored.
 - **JSON / INI** -- key order ignored.
 
+**Saved sessions (1.10)** -- Ctrl+Alt+S writes the tab's setup (paths,
+titles, read-only sides, view, rules without the markers, intraline,
+structure, pins, and for folders the mask, show filter and clock and zip
+switches) as indented JSON, `.fcsession` (`core/savedsession.py`; never any
+content). Opening one -- on the command line, by double-click (the
+installer associates the extension per user), dropped on the window, or the
+start page's Open session -- is read by `io/sessionfile.py` in the loader,
+and its settings go over the application's own through
+`MainWindow._compare_page(saved=)`. `loads` refuses a newer version and
+ignores keys it does not know.
+
 **Handed to a sibling rather than rebuilt here:**
 - PDF revisions go to **Redline PDF**, whose compare engine already handles
   alignment, scale and scanner noise far better than a text extract would.
@@ -432,6 +443,7 @@ Ctrl+Alt+Down / Up     next, previous conflict (three-way)
 Ctrl+M                 the other end of a moved block (1.5)
 Ctrl+L, Ctrl+L         pin this line opposite one on the other side (1.6)
 Ctrl+Shift+L           remove the pin here, or all pins
+Ctrl+Alt+S             save this comparison's setup as a session (1.10)
 Alt+Right / Alt+Left   copy this block to the right, to the left
 Ctrl+Alt+Right / Left  copy all differences across
 Home / End             first, last difference (from the overview map)

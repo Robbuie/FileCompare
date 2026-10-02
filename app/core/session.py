@@ -157,6 +157,8 @@ class Options:
     folder_hour: bool = True
     folder_by_content: bool = False
     folder_archives: bool = True
+    #: 1.10: folder compare's show filter, from a saved session.
+    folder_show: str = ""
     #: "auto" picks a format comparer by extension; "text" never does.
     format: str = "auto"
     #: Whether a detected format comparer starts switched on.

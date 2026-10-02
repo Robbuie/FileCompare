@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.10.0 - saved sessions
+
+- **Ctrl+Alt+S saves a comparison's setup as a session file**
+  (`.fcsession`): the two paths, their titles, the rules and ignore
+  patterns, the view, Structure on or off, and any pinned lines. For a
+  folder compare it also keeps the name filter, the show filter, and the
+  clock and zip switches.
+- **Opening the session sets up the same comparison**, read fresh from
+  disk. Double-click the file (the installer associates `.fcsession` with
+  File Compare), drop it on the window, or use **Open session** on the
+  start page.
+- A session file holds settings only, never file contents, and it's plain
+  readable text. Saving again from a tab opened from a session offers the
+  same file.
+- Run the 1.10 installer once so double-clicking a session file works. An
+  automatic update installs the association the same way.
+
 ## 1.9.0 - inside zip files
 
 - **Folder compare lists the files inside each .zip** under the zip, as

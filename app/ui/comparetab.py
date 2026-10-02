@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 from app.core import formats, siblings, syntax
 from app.core import session as core
 from app.core.diff import align
+from app.core.folders import SHOWS as F_SHOWS
 from app.core.rules import WHITESPACE, WHITESPACE_LABELS, Rules
 from app.io import load as io_load
 from app.io.load import LABELS
@@ -375,6 +376,9 @@ class CompareTab(QWidget):
         #: The other modes' views, made the first time the pair turns out to
         #: need one. None until then.
         self.folders: FolderView | None = None
+        #: 1.10: the session file this tab was opened from, if any; saving
+        #: the session again offers the same file.
+        self.session_file = ""
         self.sibling = siblings.for_pair(session.sides[0].path, session.sides[1].path)
         self._launch_request = 0
         #: "auto", or what the View switch (or --mode) chose.
@@ -662,6 +666,8 @@ class CompareTab(QWidget):
             self.status.emit(f"Copied {count} line{'s' if count != 1 else ''}")
         elif name == "report":
             self.save_report()
+        elif name == "save-session":
+            self.save_session()
         elif name == "align":
             self._align()
         elif name == "unalign":
@@ -709,6 +715,57 @@ class CompareTab(QWidget):
                                       note=s.format_note if s.structure else "")
         s._loader.submit(io_save.save, path, text.encode("utf-8"))
         self.status.emit(f"Saving {ntpath.basename(path)}")
+
+    def saved_session(self):
+        """This comparison's setup, for a session file (1.10)."""
+        from app.core.savedsession import Saved
+
+        s = self.session
+        saved = Saved(
+            left=s.sides[0].path, right=s.sides[1].path,
+            titles=(s.sides[0].title, s.sides[1].title),
+            readonly=tuple(name for name, side in zip(("left", "right"), s.sides)
+                           if side.readonly),
+            mode=self.mode,
+            rules=s.rules,
+            intraline=s.options.intraline,
+            structure=s.structure,
+            pins=list(s.pins),
+        )
+        if self.folders is not None:
+            folder = self.folders.session
+            saved.folder_mask = self.folders.mask.text()
+            saved.folder_show = self.folders.model.show
+            saved.folder_hour = folder.hour
+            saved.folder_by_content = folder.by_content
+            saved.folder_archives = folder.archives
+        return saved
+
+    def save_session(self) -> None:
+        """Ctrl+Alt+S: this comparison's setup as a .fcsession file."""
+        from app.core import savedsession
+        from app.io import save as io_save
+
+        s = self.session
+        names = tuple(ntpath.basename(display(side.path).rstrip("\\")) or "untitled"
+                      for side in s.sides)
+        folder = ntpath.dirname(display(s.sides[0].path).rstrip("\\"))
+        start = self.session_file or ntpath.join(
+            folder, f"{ntpath.splitext(names[0])[0]} vs "
+                    f"{ntpath.splitext(names[1])[0]}{savedsession.EXTENSION}")
+        path, _chosen = QFileDialog.getSaveFileName(
+            self, "Save this comparison as a session", start,
+            f"File Compare session (*{savedsession.EXTENSION})")
+        if not path:
+            return
+        path = QDir.toNativeSeparators(path)
+        if not savedsession.is_session(path):
+            path += savedsession.EXTENSION
+        text = savedsession.dumps(self.saved_session())
+        s._loader.submit(io_save.save, path, text.encode("utf-8"))
+        self.session_file = path
+        self.status.emit(f"Saved the session as {ntpath.basename(path)}; open it to compare "
+                         "the same way again")
 
     def _can_edit(self, index: int) -> bool:
         side = self.session.sides[index]
@@ -1238,6 +1295,8 @@ class CompareTab(QWidget):
                                    archives=s.options.folder_archives,
                                    parent=self)
             self.folders = FolderView(folder, self._tokens, mask=s.options.folder_mask)
+            if s.options.folder_show in F_SHOWS:
+                self.folders.set_show(s.options.folder_show)
             self.folders.openPair.connect(self.openPair)
             self.folders.openExtracted.connect(self.openExtracted)
             self.folders.status.connect(self.status)

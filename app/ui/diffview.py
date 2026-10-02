@@ -1034,6 +1034,7 @@ class DiffView(QWidget):
         (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_H): "report",
         (Qt.ControlModifier, Qt.Key_M): "move-partner",
         (Qt.ControlModifier, Qt.Key_L): "align",
+        (Qt.ControlModifier | Qt.AltModifier, Qt.Key_S): "save-session",
         (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_L): "unalign",
     }
 
