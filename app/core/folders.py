@@ -11,6 +11,15 @@ so the two applications never disagree about the same pair of files:
   * **Timestamps match within two seconds**, because FAT and SMB round, and an
     exact comparison calls half the files on a share newer every time.
 
+One thing here File Manager does not do (1.8), behind a switch that is on by
+default: a pair the same size whose times are **exactly an hour apart**, to
+within the same two seconds, is `HOUR_APART` -- shown, not counted. That is a
+clock change, not an edit: a FAT or exFAT drive, or a share on a server that
+stores local time, moves every timestamp by an hour when daylight saving
+starts or ends, and without this every file copied before the change reads
+as newer on one side. A content compare still reads such a pair and says
+whether the bytes agree.
+
 Pure Python: entries in, a tree of `Node`s out. The walking is `io/walk.py`,
 the reading for a content compare is `io/walk.py` too, and the tests prove
 everything here without a disk.
@@ -25,6 +34,9 @@ from typing import Iterable
 #: Seconds two timestamps may differ by and still be the same moment.
 TOLERANCE = 2.0
 
+#: A daylight saving change, in seconds.
+HOUR = 3600.0
+
 # Verdicts. A file pair gets one from size and time, and may get a better one
 # from its content later.
 SAME = "same"                 # same size, same time
@@ -35,6 +47,7 @@ ONLY_LEFT = "only left"
 ONLY_RIGHT = "only right"
 CLASH = "clash"               # a folder on one side, a file on the other
 CONTENT_SAME = "content same"  # times differ, bytes do not
+HOUR_APART = "hour apart"     # same size, times exactly an hour apart (1.8)
 CONTENT_DIFF = "content differs"
 ERROR = "error"               # a side could not be read
 
@@ -52,6 +65,7 @@ LABELS = {
     ONLY_RIGHT: "only on the right",
     CLASH: "a folder on one side, a file on the other",
     CONTENT_SAME: "same content, different time",
+    HOUR_APART: "same size, an hour apart",
     CONTENT_DIFF: "content differs",
     ERROR: "could not be read",
 }
@@ -156,7 +170,7 @@ class Mask:
 # ------------------------------------------------------------------ the tree
 
 def build(left: Iterable[Entry], right: Iterable[Entry], *, mask: Mask | None = None,
-          tolerance: float = TOLERANCE) -> Node:
+          tolerance: float = TOLERANCE, hour: bool = False) -> Node:
     """Merge two walks into one tree and give every node its verdict."""
     mask = mask or Mask()
     root = Node(name="", rel="")
@@ -213,14 +227,15 @@ def build(left: Iterable[Entry], right: Iterable[Entry], *, mask: Mask | None = 
                     marks[number] = True
                     found.masked = (marks[0], marks[1])
 
-    _judge(root, tolerance)
+    _judge(root, tolerance, hour)
     _sort(root)
     if mask.include:
         _prune_empty(root)
     return root
 
 
-def verdict(left: Entry | None, right: Entry | None, tolerance: float = TOLERANCE) -> str:
+def verdict(left: Entry | None, right: Entry | None, tolerance: float = TOLERANCE,
+            hour: bool = False) -> str:
     if left is None and right is None:
         return SAME
     if (left and left.error) or (right and right.error):
@@ -233,17 +248,20 @@ def verdict(left: Entry | None, right: Entry | None, tolerance: float = TOLERANC
         return CLASH
     if left.is_dir:
         return SAME
-    if abs(left.mtime - right.mtime) <= tolerance:
+    apart = abs(left.mtime - right.mtime)
+    if apart <= tolerance:
         return SAME if left.size == right.size else DIFFERENT
+    if hour and left.size == right.size and abs(apart - HOUR) <= tolerance:
+        return HOUR_APART
     return NEWER_LEFT if left.mtime > right.mtime else NEWER_RIGHT
 
 
-def _judge(node: Node, tolerance: float) -> None:
+def _judge(node: Node, tolerance: float, hour: bool = False) -> None:
     """Verdicts bottom up. A folder differs if anything under it does, and
     says how many files that is."""
     for child in node.children:
-        _judge(child, tolerance)
-    own = verdict(node.left, node.right, tolerance) if node.rel else SAME
+        _judge(child, tolerance, hour)
+    own = verdict(node.left, node.right, tolerance, hour) if node.rel else SAME
     if node.rel and not node.is_dir:
         node.status = own
         node.files = 1
@@ -326,7 +344,7 @@ def shown(node: Node, show: str) -> bool:
     if show == SHOW_RIGHT:
         return status in (ONLY_RIGHT, NEWER_RIGHT)
     if show == SHOW_SAME:
-        return status in (SAME, CONTENT_SAME)
+        return status in (SAME, CONTENT_SAME, HOUR_APART)
     return True
 
 
@@ -351,12 +369,16 @@ def summary(root: Node) -> str:
         extra = ""
         if totals.get(CONTENT_SAME):
             extra = f"  ·  {totals[CONTENT_SAME]:,} with different times"
+        if totals.get(HOUR_APART):
+            extra += f"  ·  {totals[HOUR_APART]:,} an hour apart (clock change)"
         return f"No differences in {files:,} files{extra}"
     parts = []
     for key in (NEWER_LEFT, NEWER_RIGHT, ONLY_LEFT, ONLY_RIGHT, DIFFERENT, CONTENT_DIFF,
                 CLASH, ERROR):
         if totals.get(key):
             parts.append(f"{totals[key]:,} {LABELS[key]}")
+    if totals.get(HOUR_APART):
+        parts.append(f"{totals[HOUR_APART]:,} an hour apart, not counted")
     return f"{differing:,} of {files:,} differ  ·  " + "  ·  ".join(parts)
 
 
@@ -373,7 +395,8 @@ def content_candidates(root: Node, *, all_pairs: bool = False) -> list[Node]:
     for node in root.walk():
         if not node.pair:
             continue
-        if node.status in (NEWER_LEFT, NEWER_RIGHT) and node.left.size == node.right.size:
+        if node.status in (NEWER_LEFT, NEWER_RIGHT, HOUR_APART) \
+                and node.left.size == node.right.size:
             out.append(node)
         elif all_pairs and node.status == SAME:
             out.append(node)

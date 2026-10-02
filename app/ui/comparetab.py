@@ -355,6 +355,8 @@ class CompareTab(QWidget):
 
     titleChanged = Signal()
     status = Signal(str)
+    #: A setting to keep for next time: (config key, value).
+    setting = Signal(str, object)
     #: Every save the tab asked for has finished, successfully or not.
     savesFinished = Signal(bool)
     #: A pair to open in a tab of its own (from folder compare).
@@ -1230,10 +1232,13 @@ class CompareTab(QWidget):
             s = self.session
             folder = FolderSession(s._loader, s.sides[0].path, s.sides[1].path,
                                    mask=s.options.folder_mask, timeout=s.options.timeout,
+                                   hour=s.options.folder_hour,
+                                   by_content=s.options.folder_by_content,
                                    parent=self)
             self.folders = FolderView(folder, self._tokens, mask=s.options.folder_mask)
             self.folders.openPair.connect(self.openPair)
             self.folders.status.connect(self.status)
+            self.folders.setting.connect(self.setting)
             self.folders.command.connect(self._command)
             self.stack.addWidget(self.folders)
             folder.start()

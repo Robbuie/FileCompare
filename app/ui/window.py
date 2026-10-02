@@ -271,6 +271,8 @@ class MainWindow(QMainWindow):
             max_bytes=int(float(self._config.get("load.max_mb")) * 1024 * 1024),
             backup=bool(self._config.get("save.backup")),
             folder_mask=str(self._config.get("folders.mask") or ""),
+            folder_hour=bool(self._config.get("folders.ignore_hour")),
+            folder_by_content=bool(self._config.get("folders.by_content")),
             mode=mode,
             format="text" if mode == "text" else "auto",
             syntax="auto" if self._config.get("view.syntax") else "off",
@@ -282,6 +284,7 @@ class MainWindow(QMainWindow):
         tab.openPair.connect(lambda l, r: self.compare(l, r))
         tab.titleChanged.connect(lambda t=tab: self._retitle(t))
         tab.status.connect(lambda text, t=tab: self._tab_status(t, text))
+        tab.setting.connect(self._config.set)
         session.start()
         return tab
 

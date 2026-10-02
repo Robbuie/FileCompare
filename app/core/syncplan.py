@@ -239,7 +239,9 @@ def _visit(node: F.Node, direction: str, *, picked: bool, removals: bool,
                    tolerance=tolerance, out=out)
         return
     # A file on both sides.
-    if node.status in (F.SAME, F.CONTENT_SAME):
+    if node.status in (F.SAME, F.CONTENT_SAME, F.HOUR_APART):
+        # An hour apart is a clock change, not an edit (1.8): copying it
+        # would only move the clock, so it is left alone like a same file.
         return
     if picked:
         if _target_folder_missing(node, direction):

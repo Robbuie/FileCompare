@@ -33,8 +33,8 @@ FAILED = "failed"
 SLOW = "not answering"
 
 
-def _build_job(left, right, mask, tolerance):
-    return folders.build(left, right, mask=mask, tolerance=tolerance)
+def _build_job(left, right, mask, tolerance, hour=False):
+    return folders.build(left, right, mask=mask, tolerance=tolerance, hour=hour)
 
 
 class FolderSide:
@@ -73,8 +73,14 @@ class FolderSession(QObject):
 
     def __init__(self, loader: Loader, left: str, right: str, *, mask: str = "",
                  timeout: float = 30.0, titles: tuple[str, str] = ("", ""),
+                 hour: bool = True, by_content: bool = False,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
+        #: 1.8: a same-size pair exactly an hour apart is a clock change.
+        self.hour = hour
+        #: 1.8: read every same-size pair after each walk, so the verdicts
+        #: rest on the bytes rather than on the clock.
+        self.by_content = by_content
         self._loader = loader
         self.sides = [FolderSide(left, titles[0]), FolderSide(right, titles[1])]
         self.mask = folders.Mask.parse(mask)
@@ -157,6 +163,19 @@ class FolderSession(QObject):
         # be planned from verdicts that no longer hold.
         self.tree = None
         self._build()
+
+    def set_hour(self, on: bool) -> None:
+        if on != self.hour:
+            self.hour = on
+            self._build()
+
+    def set_by_content(self, on: bool) -> None:
+        if on == self.by_content:
+            return
+        self.by_content = on
+        if on and self.tree is not None and not self.busy:
+            self.compare_contents(nodes=[n for n in self.tree.walk()
+                                         if n.pair and n.left.size == n.right.size])
 
     def swap(self) -> None:
         self.sides.reverse()
@@ -365,6 +384,12 @@ class FolderSession(QObject):
             if envelope.ok:
                 self.tree = envelope.value
                 self.problem = ""
+                if self.by_content:
+                    # Different sizes are different files whatever the bytes;
+                    # every other pair is read.
+                    self.compare_contents(nodes=[
+                        n for n in self.tree.walk()
+                        if n.pair and n.left.size == n.right.size])
             else:
                 self.problem = f"The comparison failed: {envelope.error}"
             self.changed.emit()
@@ -388,7 +413,7 @@ class FolderSession(QObject):
         self.building = True
         self._build_request = self._loader.submit(
             _build_job, self.sides[0].entries, self.sides[1].entries, self.mask,
-            folders.TOLERANCE)
+            folders.TOLERANCE, self.hour)
         self.changed.emit()
 
 

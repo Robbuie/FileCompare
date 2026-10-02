@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.8.0 - folder compare and the clock
+
+- **Files the same size whose times are exactly an hour apart now count as
+  the same.** That shift is what a daylight saving change does to files on a
+  FAT drive or on a share that stores local time. Before, every file copied
+  before the change showed as newer on one side. These pairs are listed in
+  grey, marked "same size, an hour apart", left out of the count and left
+  alone by sync. Compare contents still reads them and says whether the
+  bytes really agree. Turn it off with **Compare contents > Ignore a
+  one-hour shift**.
+- **Compare contents > Always compare contents**: after every walk, each
+  pair with the same size is read, so a file only counts as different when
+  its bytes differ, whatever the timestamps say. Use it on shares where you
+  can't trust the timestamps. Pairs of different sizes need no reading.
+- Both settings are remembered for the next folder compare.
+- File Manager's own pane compare still treats an hour as newer. Its rule
+  hasn't changed.
+
 ## 1.7.0 - L5K exports by structure
 
 - **L5K files now compare the way L5X files do.** Programs, routines, tags,

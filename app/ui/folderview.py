@@ -51,6 +51,7 @@ NAME, LSIZE, LTIME, VERDICT, RTIME, RSIZE = range(6)
 MARKS = {
     F.SAME: "=",
     F.CONTENT_SAME: "=",
+    F.HOUR_APART: "=",
     F.NEWER_LEFT: "<",
     F.NEWER_RIGHT: ">",
     F.DIFFERENT: "!=",
@@ -229,6 +230,7 @@ def _ink(status: str) -> str:
         F.CLASH: "diff_del_bar",
         F.ERROR: "warn",
         F.CONTENT_SAME: "txt_2",
+        F.HOUR_APART: "txt_2",
     }.get(status, "")
 
 
@@ -278,6 +280,8 @@ class FolderView(QWidget):
     status = Signal(str)
     #: Keys that belong to the tab: "swap", "reload".
     command = Signal(str)
+    #: A folder setting to keep for next time: (config key, value).
+    setting = Signal(str, object)
 
     def __init__(self, session: FolderSession, tokens: dict[str, str], *,
                  mask: str = "", parent: QWidget | None = None) -> None:
@@ -341,6 +345,19 @@ class FolderView(QWidget):
         menu.addAction("The selected rows", self._contents_selected)
         menu.addSeparator()
         menu.addAction("Stop", self.session.cancel_contents)
+        # 1.8: two ways of not trusting the clock.
+        menu.addSeparator()
+        self._always = menu.addAction("Always compare contents")
+        self._always.setCheckable(True)
+        self._always.setChecked(self.session.by_content)
+        self._always.setToolTip("After every walk, read every pair with the same size, so "
+                                "a file only counts as different when its bytes are")
+        self._always.toggled.connect(self._set_by_content)
+        self._hour = menu.addAction("Ignore a one-hour shift (clock change)")
+        self._hour.setCheckable(True)
+        self._hour.setChecked(self.session.hour)
+        self._hour.toggled.connect(self._set_hour)
+        menu.setToolTipsVisible(True)
         self.contents.setMenu(menu)
         # 1.0: sync, handed to File Manager's queue (`ui/syncdialog.py`).
         self.sync = QToolButton()
@@ -517,6 +534,18 @@ class FolderView(QWidget):
         self.status.emit(text)
         # The line keeps the handoff's words; only the button follows the state.
         self.sync.setEnabled(self.session.tree is not None or self.session.syncing)
+
+    def _set_by_content(self, on: bool) -> None:
+        self.session.set_by_content(on)
+        self.setting.emit("folders.by_content", bool(on))
+        self.status.emit("Every pair with the same size is read after each walk" if on
+                         else "Pairs are judged by size and time; Compare contents reads them")
+
+    def _set_hour(self, on: bool) -> None:
+        self.session.set_hour(on)
+        self.setting.emit("folders.ignore_hour", bool(on))
+        self.status.emit("Files the same size exactly an hour apart count as the same"
+                         if on else "An hour's difference counts as newer")
 
     def _contents(self, all_pairs: bool = False) -> None:
         count = self.session.compare_contents(all_pairs=all_pairs)

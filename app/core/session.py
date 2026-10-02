@@ -153,6 +153,9 @@ class Options:
     poll: bool = True
     #: Folder compare's name mask, as typed (`core/folders.Mask`).
     folder_mask: str = ""
+    #: 1.8: folder compare's clock settings (`core/folderdiff.py`).
+    folder_hour: bool = True
+    folder_by_content: bool = False
     #: "auto" picks a format comparer by extension; "text" never does.
     format: str = "auto"
     #: Whether a detected format comparer starts switched on.

@@ -66,6 +66,11 @@ DEFAULTS: dict[str, Any] = {
     # Folder compare's names to include and leave out (`core/folders.Mask`).
     "folders.mask": "-.git;-__pycache__;-Thumbs.db;-desktop.ini",
 
+    # 1.8: same-size files exactly an hour apart are a clock change, not an
+    # edit; and whether every same-size pair is read after each walk.
+    "folders.ignore_hour": True,
+    "folders.by_content": False,
+
     # Keep `name.ext.orig` beside a file the first time it is saved.
     "save.backup": False,
 

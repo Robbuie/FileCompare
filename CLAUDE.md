@@ -268,6 +268,13 @@ by what was opened and can be switched from the tab's header.
 - Compare by size and time (instant), then by content (queued, cancellable,
   per file). Size-and-time uses File Manager's two-second tolerance and
   case-insensitive names for the same reasons stated in its `core/compare.py`.
+- Two clock switches (1.8), in the Compare contents menu and kept in the
+  settings: **ignore a one-hour shift** (`folders.ignore_hour`, on) makes a
+  same-size pair exactly an hour apart `HOUR_APART` -- shown grey, not
+  counted, never synced, still read by a content compare. This is the one
+  place the verdicts knowingly differ from File Manager's pane compare.
+  **Always compare contents** (`folders.by_content`, off) reads every
+  same-size pair after each walk.
 - Filters: name masks, show only differences, only one side, hide equal
   folders.
 - Enter on a pair opens it in a new tab in the right mode.
