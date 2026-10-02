@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.0 - align lines by hand
+
+- **When the automatic diff lines up the wrong lines, you can say which go
+  together.** Put the cursor on a line and press **Ctrl+L**, press Tab to go
+  to the other side, put the cursor on the line that belongs opposite it, and
+  press **Ctrl+L** again. The two lines are put on one row, and the files are
+  compared separately above and below that row.
+- A pinned row is marked by a bar across the gutter. Add as many pins as
+  you need. A new pin that contradicts an earlier one (line 10 opposite 50,
+  then line 20 opposite 40) replaces it.
+- **Ctrl+Shift+L** removes the pin on the cursor's row, or every pin when
+  the cursor is not on one, and cancels a pin that is only half made.
+- Pins move with their lines when you edit, undo or swap sides. Turning
+  Structure on or off removes them, since the lines being shown change.
+
 ## 1.5.0 - moved blocks
 
 - **A block that was cut and pasted elsewhere is shown as a move**, not as

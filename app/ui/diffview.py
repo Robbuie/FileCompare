@@ -77,6 +77,10 @@ class ViewState:
     #: where the other end is.
     moved: set = field(default_factory=set)
     comparison: object = None
+    #: 1.6: rows held by a pin, and the half-made pin -- `(side, row)` of the
+    #: line picked first -- while the other line is being chosen.
+    pinned: set = field(default_factory=set)
+    pending: tuple | None = None
 
     def syntax_spans(self, side: int, index: int):
         held = self.syntax[side]
@@ -311,6 +315,13 @@ class TextPane(_Painted):
             if selected_lo <= row < selected_hi:
                 painter.fillRect(text_band, select)
                 painter.fillRect(QRectF(numbers, y, 2, self.row_h), select_edge)
+            if s.pending == (side, row):
+                # The first half of a pin: outlined in the accent until the
+                # line for the other side is chosen.
+                painter.setPen(QPen(select_edge, 1, Qt.DashLine))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(QRectF(numbers + 1, y + 0.5, self.width() - numbers - 2,
+                                        self.row_h - 1))
             if s.find is not None:
                 line = s.display(side, index)
                 for match in s.find.finditer(line):
@@ -471,6 +482,15 @@ class Gutter(_Painted):
                 painter.drawLine(self.width() - 3, int(top), self.width() - 3, int(bottom))
             if block.significant and s.first <= block.start < end:
                 self._arrows(painter, top, current)
+        if s.pinned:
+            # A pin is a bar straight across, in the accent: these two lines
+            # are opposite each other because somebody said so.
+            pen = QPen(self.colour("accent"), 2)
+            for row in s.pinned:
+                if s.first <= row < end:
+                    y = (row - s.first) * self.row_h + self.row_h / 2
+                    painter.setPen(pen)
+                    painter.drawLine(QPointF(1, y), QPointF(self.width() - 1, y))
         painter.setPen(QPen(self.colour("line_soft"), 1))
         painter.drawLine(0, 0, 0, self.height())
         painter.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
@@ -706,7 +726,8 @@ class DiffView(QWidget):
         self._layout_changed()
 
     def set_comparison(self, comparison: align.Comparison, left: list[str],
-                       right: list[str], mode: str) -> None:
+                       right: list[str], mode: str,
+                       pins: list[tuple[int, int]] | tuple = ()) -> None:
         keep = self.state.first if self.state.rows else 0
         keep_current = self.state.current if self.state.rows else None
         had = bool(self.state.rows)
@@ -715,6 +736,10 @@ class DiffView(QWidget):
         self.state.blocks = comparison.blocks
         self.state.moved = comparison.moved_rows()
         self.state.comparison = comparison
+        held = set(pins)
+        self.state.pinned = ({r for r, (i, j, _k) in enumerate(comparison.rows) if (i, j) in held}
+                             if held else set())
+        self.state.pending = None
         self.state.lines = (left, right)
         self.state.mode = mode
         self.state.marks = {}
@@ -1008,6 +1033,8 @@ class DiffView(QWidget):
         (Qt.ShiftModifier, Qt.Key_Return): "insert-line",
         (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_H): "report",
         (Qt.ControlModifier, Qt.Key_M): "move-partner",
+        (Qt.ControlModifier, Qt.Key_L): "align",
+        (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_L): "unalign",
     }
 
     def keyPressEvent(self, event) -> None:  # noqa: N802

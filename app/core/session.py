@@ -195,6 +195,10 @@ class Session(QObject):
             formats.detect(left, right)
         self.structure = self.options.structure and self.format_kind in formats.DEFAULT_ON
         self._result_revisions: tuple[int, int] = (-1, -1)
+        #: 1.6: `(left line, right line)` pairs held opposite each other,
+        #: newest first, in the numbering of the lines the view shows (the
+        #: normalised ones when a format comparer is on).
+        self.pins: list[tuple[int, int]] = []
         self.comparing = False
         self.problem = ""
         self._compare_request = 0
@@ -279,6 +283,8 @@ class Session(QObject):
         on = on and self.format_kind != formats.PLAIN
         if on != self.structure:
             self.structure = on
+            # Pins name lines of the text shown, and that text is changing.
+            self.pins = []
             self._compare()
 
     def set_intraline(self, mode: str) -> None:
@@ -292,8 +298,37 @@ class Session(QObject):
         kinds, is run again."""
         self.sides.reverse()
         self._timers.reverse()
+        self.pins = [(j, i) for i, j in self.pins]
         self._save_requests = {r: 1 - i for r, i in self._save_requests.items()}
         self._compare()
+
+    # ---------------------------------------------------------- alignment
+
+    def pin(self, left_line: int, right_line: int) -> None:
+        """Hold a left line opposite a right line (1.6). A pin already on
+        either line, or one that crosses the new pin, gives way to it."""
+        pins = [(left_line, right_line)] + [
+            (i, j) for i, j in self.pins if i != left_line and j != right_line]
+        kept = align.valid_pins(pins, 1 << 62, 1 << 62)
+        self.pins = [(left_line, right_line)] + [p for p in kept if p != (left_line, right_line)]
+        self._compare()
+
+    def unpin(self, left_line: int | None = None, right_line: int | None = None) -> bool:
+        """Remove the pin on either line given, or with neither, every pin."""
+        before = len(self.pins)
+        if left_line is None and right_line is None:
+            self.pins = []
+        else:
+            self.pins = [(i, j) for i, j in self.pins
+                         if i != left_line and j != right_line]
+        if len(self.pins) != before:
+            self._compare()
+            return True
+        return False
+
+    def _shift_pins(self, index: int, start: int, old: int, new: int) -> None:
+        if self.pins:
+            self.pins = align.shift_pins(self.pins, index, start, old, new)
 
     # -------------------------------------------------------------- editing
 
@@ -303,6 +338,7 @@ class Session(QObject):
         if not side.editable:
             return False
         if side.doc.replace(start, end, lines):
+            self._shift_pins(index, start, end - start, len(lines))
             self._edited()
             return True
         return False
@@ -322,6 +358,7 @@ class Session(QObject):
         dst0, dst1 = align.side_range(rows, b.start, b.end, to_side)
         source = self.sides[1 - to_side].lines[src0:src1]
         if target.doc.replace(dst0, dst1, source):
+            self._shift_pins(to_side, dst0, dst1 - dst0, len(source))
             self._edited()
             return True
         return False
@@ -333,22 +370,28 @@ class Session(QObject):
         source = self.sides[1 - to_side]
         if not target.editable or source.doc is None and source.loaded is None:
             return False
-        if target.doc.replace(0, len(target.doc.lines), list(source.lines)):
+        old = len(target.doc.lines)
+        if target.doc.replace(0, old, list(source.lines)):
+            self._shift_pins(to_side, 0, old, len(source.lines))
             self._edited()
             return True
         return False
 
     def undo(self, index: int) -> bool:
         side = self.sides[index]
-        if side.doc is None or side.doc.undo() is None:
+        splice = None if side.doc is None else side.doc.undo()
+        if splice is None:
             return False
+        self._shift_pins(index, splice.start, len(splice.new_lines), len(splice.old_lines))
         self._edited()
         return True
 
     def redo(self, index: int) -> bool:
         side = self.sides[index]
-        if side.doc is None or side.doc.redo() is None:
+        splice = None if side.doc is None else side.doc.redo()
+        if splice is None:
             return False
+        self._shift_pins(index, splice.start, len(splice.old_lines), len(splice.new_lines))
         self._edited()
         return True
 
@@ -601,24 +644,26 @@ class Session(QObject):
         if len(lines[0]) + len(lines[1]) <= SYNC_LINES:
             self._compare_request = 0
             self.comparing = False
-            result, shown, crumbs, note = _compare_job(lines, self.options.rules, kind)
+            result, shown, crumbs, note = _compare_job(lines, self.options.rules, kind,
+                                                       tuple(self.pins))
             self._take(result, shown, revisions, crumbs, note)
             self.changed.emit()
             return
         self.comparing = True
         self._compare_revisions = revisions
-        self._compare_request = self._loader.submit(_compare_job, lines, self.options.rules, kind)
+        self._compare_request = self._loader.submit(_compare_job, lines, self.options.rules,
+                                                    kind, tuple(self.pins))
         self.changed.emit()
 
 
-def _compare_job(lines, rules, kind=formats.PLAIN):
+def _compare_job(lines, rules, kind=formats.PLAIN, pins=()):
     """The diff, through a format comparer first when one is on. Returns the
     result, the lines it was computed from, their crumbs, and the note."""
     if kind == formats.PLAIN:
-        return align.compare(lines[0], lines[1], rules), lines, ([], []), ""
+        return align.compare(lines[0], lines[1], rules, pins), lines, ([], []), ""
     a = formats.normalise(kind, lines[0])
     b = formats.normalise(kind, lines[1])
     note = a.problem or b.problem or f"{formats.names()[kind]}: ignoring {a.ignored}"
     shown = (a.lines, b.lines)
-    return align.compare(shown[0], shown[1], rules), shown, (a.crumbs, b.crumbs), note
+    return align.compare(shown[0], shown[1], rules, pins), shown, (a.crumbs, b.crumbs), note
 

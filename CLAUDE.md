@@ -254,6 +254,12 @@ by what was opened and can be switched from the tab's header.
   to the other. The rows keep their DELETED and INSERTED kinds; a block's
   `move` and `Comparison.moves` carry the pairing. A move needs at least
   `MOVE_MIN_CHARS` of text, so one L5X rung counts and a lone `end;` does not.
+- Manual alignment (1.6): Ctrl+L on a line, Tab, Ctrl+L on a line of the other
+  side pins them onto one row; the diff runs separately between pins
+  (`align.compare(..., pins)`), so nothing matches across one. Pins live on
+  the session, newest first, in the numbering of the lines shown; edits,
+  undo and swap carry them (`shift_pins`), a structure toggle drops them, and
+  a pin that crosses a newer one gives way (`valid_pins`).
 - Syntax colour (1.1) by the file's name, about six hundred languages
   through Pygments and L5K and Structured Text through our own lexers; a
   language menu in the toolbar picks another or none.
@@ -402,6 +408,8 @@ for the same idea, it is the same key.
 Alt+Down / Alt+Up      next, previous difference
 Ctrl+Alt+Down / Up     next, previous conflict (three-way)
 Ctrl+M                 the other end of a moved block (1.5)
+Ctrl+L, Ctrl+L         pin this line opposite one on the other side (1.6)
+Ctrl+Shift+L           remove the pin here, or all pins
 Alt+Right / Alt+Left   copy this block to the right, to the left
 Ctrl+Alt+Right / Left  copy all differences across
 Home / End             first, last difference (from the overview map)

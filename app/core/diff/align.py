@@ -195,8 +195,14 @@ class Comparison:
 
 
 def compare(left: Sequence[str], right: Sequence[str],
-            rules: Rules | None = None) -> Comparison:
-    """Compare two files given as lists of lines without their endings."""
+            rules: Rules | None = None,
+            pins: Sequence[tuple[int, int]] = ()) -> Comparison:
+    """Compare two files given as lists of lines without their endings.
+
+    `pins` (1.6) are `(left line, right line)` pairs a person said belong
+    opposite each other. Each one is put on a row of its own, and the diff
+    runs separately above and below it, so nothing can be matched across a
+    pin. See `valid_pins` for which are kept."""
     began = time.perf_counter()
     rules = (rules or Rules()).active()
     key = normaliser(rules)
@@ -214,20 +220,47 @@ def compare(left: Sequence[str], right: Sequence[str],
         left_kept = list(range(len(left)))
         right_kept = list(range(len(right)))
 
-    runs = line_diff.matches([left_keys[i] for i in left_kept],
-                             [right_keys[j] for j in right_kept])
-
     rows: list[Row] = []
     a = b = 0
-    for fi, fj, n in runs:
-        for k in range(n):
-            i = left_kept[fi + k]
-            j = right_kept[fj + k]
-            _gap(rows, left, right, a, i, b, j, rules)
-            kind = EQUAL if left[i] == right[j] else IGNORED
-            rows.append((i, j, kind))
-            a, b = i + 1, j + 1
-    _gap(rows, left, right, a, len(left), b, len(right), rules)
+    kept_at = kept_bt = 0
+    pinned = valid_pins(pins, len(left), len(right))
+    for pi, pj in pinned + [(len(left), len(right))]:
+        # The kept lines of this segment: those between the last pin and
+        # this one. Both lists are sorted, so the segment is a slice.
+        kept_a1 = kept_at
+        while kept_a1 < len(left_kept) and left_kept[kept_a1] < pi:
+            kept_a1 += 1
+        kept_b1 = kept_bt
+        while kept_b1 < len(right_kept) and right_kept[kept_b1] < pj:
+            kept_b1 += 1
+        seg_left = left_kept[kept_at:kept_a1]
+        seg_right = right_kept[kept_bt:kept_b1]
+        runs = line_diff.matches([left_keys[i] for i in seg_left],
+                                 [right_keys[j] for j in seg_right])
+        for fi, fj, n in runs:
+            for k in range(n):
+                i = seg_left[fi + k]
+                j = seg_right[fj + k]
+                _gap(rows, left, right, a, i, b, j, rules)
+                kind = EQUAL if left[i] == right[j] else IGNORED
+                rows.append((i, j, kind))
+                a, b = i + 1, j + 1
+        _gap(rows, left, right, a, pi, b, pj, rules)
+        if pi < len(left):
+            if left[pi] == right[pj]:
+                kind = EQUAL
+            elif left_keys[pi] == right_keys[pj]:
+                kind = IGNORED
+            else:
+                kind = CHANGED
+            rows.append((pi, pj, kind))
+            a, b = pi + 1, pj + 1
+        kept_at, kept_bt = kept_a1, kept_b1
+        # A pinned line itself is not in the next segment.
+        if kept_at < len(left_kept) and left_kept[kept_at] == pi:
+            kept_at += 1
+        if kept_bt < len(right_kept) and right_kept[kept_bt] == pj:
+            kept_bt += 1
 
     found = _moves(rows, left_keys, right_keys, left, right)
     blocks, moves = _blocks_with_moves(rows, found)
@@ -235,6 +268,42 @@ def compare(left: Sequence[str], right: Sequence[str],
                         left_count=len(left), right_count=len(right))
     result.elapsed = time.perf_counter() - began
     return result
+
+
+def valid_pins(pins: Sequence[tuple[int, int]], left_count: int,
+               right_count: int) -> list[tuple[int, int]]:
+    """The pins that can all hold at once, in order.
+
+    A pin outside either file is dropped. Pins have to agree on order -- one
+    cannot say line 10 goes opposite 50 and line 20 opposite 40 -- so going
+    in the order given, a pin that crosses one already kept is dropped. The
+    session puts the newest pin first, so the newest wins."""
+    kept: list[tuple[int, int]] = []
+    for i, j in pins:
+        if not (0 <= i < left_count and 0 <= j < right_count):
+            continue
+        if any((i <= ki) != (j <= kj) or i == ki or j == kj for ki, kj in kept):
+            continue
+        kept.append((i, j))
+    kept.sort()
+    return kept
+
+
+def shift_pins(pins: Sequence[tuple[int, int]], side: int, start: int, old: int,
+               new: int) -> list[tuple[int, int]]:
+    """Pins after lines `start:start+old` of one side became `new` lines.
+
+    A pin on a line that was replaced is gone -- the line it named is not
+    there any more. Pins below the edit move with their lines."""
+    out = []
+    for pin in pins:
+        line = pin[side]
+        if start <= line < start + old:
+            continue
+        if line >= start + old:
+            line += new - old
+        out.append((line, pin[1]) if side == 0 else (pin[0], line))
+    return out
 
 
 def _gap(rows: list[Row], left: Sequence[str], right: Sequence[str],

@@ -659,6 +659,10 @@ class CompareTab(QWidget):
             self.status.emit(f"Copied {count} line{'s' if count != 1 else ''}")
         elif name == "report":
             self.save_report()
+        elif name == "align":
+            self._align()
+        elif name == "unalign":
+            self._unalign()
         elif name == "move-partner":
             if not self.view.go_to_partner():
                 self.status.emit("This difference is not a moved block")
@@ -983,7 +987,7 @@ class CompareTab(QWidget):
             if s.result is not self._shown_result:
                 self._shown_result = s.result
                 left, right = s.result_lines
-                self.view.set_comparison(s.result, left, right, s.options.intraline)
+                self.view.set_comparison(s.result, left, right, s.options.intraline, s.pins)
                 self._colour()
                 if self.find.isVisible():
                     self._find_changed()
@@ -1407,6 +1411,61 @@ class CompareTab(QWidget):
         self.heads[1].set_focused(self.view.focused_side == 1)
         if result is not None:
             self.status.emit(self._status_line(result))
+
+    def _align(self) -> None:
+        """Ctrl+L, twice: hold a line on one side opposite a line on the
+        other (1.6). The first press picks the line under the cursor; Tab
+        across, move to the other line, and the second press makes the pin."""
+        s = self.session
+        state = self.view.state
+        if s.result is None or s.kind != core.TEXT or not state.rows:
+            self.status.emit("Lines can be aligned in a text comparison")
+            return
+        side = self.view.focused_side
+        row = state.cursor
+        line = state.rows[row][side]
+        if line == align.NONE:
+            self.status.emit("That row has no line on this side to align")
+            return
+        names = ("left", "right")
+        pending = state.pending
+        if pending is None or pending[0] == side:
+            state.pending = (side, row)
+            self.view.update_all()
+            self.status.emit(f"Aligning {names[side]} line {line + 1}: pick the line on the "
+                             f"{names[1 - side]} and press Ctrl+L again (Ctrl+Shift+L cancels)")
+            return
+        other = state.rows[pending[1]][pending[0]]
+        state.pending = None
+        left_line, right_line = (line, other) if side == 0 else (other, line)
+        dropped = len(s.pins)
+        s.pin(left_line, right_line)
+        dropped = dropped + 1 - len(s.pins)
+        note = f"; {dropped} earlier pin{'s' if dropped != 1 else ''} gave way" if dropped else ""
+        self.status.emit(f"Left {left_line + 1} is held opposite right {right_line + 1}{note}. "
+                         f"Ctrl+Shift+L removes pins")
+
+    def _unalign(self) -> None:
+        """Ctrl+Shift+L: cancel a half-made pin; otherwise remove the pin on
+        the cursor's row, or every pin when the cursor is not on one."""
+        s = self.session
+        state = self.view.state
+        if state.pending is not None:
+            state.pending = None
+            self.view.update_all()
+            self.status.emit("Alignment cancelled")
+            return
+        if not s.pins:
+            self.status.emit("No lines are pinned")
+            return
+        if state.cursor in state.pinned and state.rows:
+            i, j, _kind = state.rows[state.cursor]
+            s.unpin(i, j)
+            self.status.emit(f"Removed the pin on left {i + 1}, right {j + 1}")
+            return
+        count = len(s.pins)
+        s.unpin()
+        self.status.emit(f"Removed {count} pin{'s' if count != 1 else ''}")
 
     def _moved_note(self) -> str:
         """For one end of a move: where the other end is, by line number,
