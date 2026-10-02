@@ -361,6 +361,7 @@ class CompareTab(QWidget):
     savesFinished = Signal(bool)
     #: A pair to open in a tab of its own (from folder compare).
     openPair = Signal(str, str)
+    openExtracted = Signal(str, str, object)
 
     def __init__(self, session: core.Session, tokens: dict[str, str],
                  parent: QWidget | None = None) -> None:
@@ -1234,9 +1235,11 @@ class CompareTab(QWidget):
                                    mask=s.options.folder_mask, timeout=s.options.timeout,
                                    hour=s.options.folder_hour,
                                    by_content=s.options.folder_by_content,
+                                   archives=s.options.folder_archives,
                                    parent=self)
             self.folders = FolderView(folder, self._tokens, mask=s.options.folder_mask)
             self.folders.openPair.connect(self.openPair)
+            self.folders.openExtracted.connect(self.openExtracted)
             self.folders.status.connect(self.status)
             self.folders.setting.connect(self.setting)
             self.folders.command.connect(self._command)

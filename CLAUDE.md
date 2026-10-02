@@ -275,6 +275,14 @@ by what was opened and can be switched from the tab's header.
   place the verdicts knowingly differ from File Manager's pane compare.
   **Always compare contents** (`folders.by_content`, off) reads every
   same-size pair after each walk.
+- Zip contents (1.9, `folders.archives`, on): `io/archive.py` reads each
+  .zip's central directory during the walk and lists its members as entries
+  with `archive` (the zip's rel) and `crc` set. A member pair is judged by
+  size and CRC (`verdict`), never read, counted (`counts`, `Node.files`),
+  content-compared or synced (`syncplan` skips it as INSIDE_ZIP; the zip is
+  one file). Enter on one extracts the pair to `%TEMP%\FileCompare\zip`
+  off the UI thread and opens it read-only. Only `.zip`: .docx, .xlsx and
+  the other zip-shaped formats are documents.
 - Filters: name masks, show only differences, only one side, hide equal
   folders.
 - Enter on a pair opens it in a new tab in the right mode.

@@ -277,6 +277,8 @@ class FolderView(QWidget):
     """Emits `openPair(left, right)` for a file pair to compare in a tab."""
 
     openPair = Signal(str, str)
+    #: 1.9: a pair extracted from zips: (left, right, titles), opened read-only.
+    openExtracted = Signal(str, str, object)
     status = Signal(str)
     #: Keys that belong to the tab: "swap", "reload".
     command = Signal(str)
@@ -297,6 +299,7 @@ class FolderView(QWidget):
         self.tree.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._context)
+        session.extracted.connect(self.openExtracted)
         self.tree.doubleClicked.connect(lambda _i: self._open())
         self.tree.command.connect(self._command)
         header = self.tree.header()
@@ -357,6 +360,12 @@ class FolderView(QWidget):
         self._hour.setCheckable(True)
         self._hour.setChecked(self.session.hour)
         self._hour.toggled.connect(self._set_hour)
+        self._zips = menu.addAction("Look inside .zip files")
+        self._zips.setCheckable(True)
+        self._zips.setChecked(self.session.archives)
+        self._zips.setToolTip("List each zip's files under it and compare them by size "
+                              "and CRC, without unpacking anything")
+        self._zips.toggled.connect(self._set_archives)
         menu.setToolTipsVisible(True)
         self.contents.setMenu(menu)
         # 1.0: sync, handed to File Manager's queue (`ui/syncdialog.py`).
@@ -486,6 +495,12 @@ class FolderView(QWidget):
         for node in self.selected()[:8]:
             if node.is_dir:
                 continue
+            if node.member:
+                if self.session.open_member(node):
+                    self.status.emit(f"Opening {node.name} from the zip...")
+                else:
+                    self.status.emit("Still opening the last one from a zip")
+                continue
             left, right = self.session.paths(node)
             if node.left is None:
                 left = ""
@@ -540,6 +555,10 @@ class FolderView(QWidget):
         self.setting.emit("folders.by_content", bool(on))
         self.status.emit("Every pair with the same size is read after each walk" if on
                          else "Pairs are judged by size and time; Compare contents reads them")
+
+    def _set_archives(self, on: bool) -> None:
+        self.session.set_archives(on)
+        self.setting.emit("folders.archives", bool(on))
 
     def _set_hour(self, on: bool) -> None:
         self.session.set_hour(on)

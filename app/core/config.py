@@ -70,6 +70,8 @@ DEFAULTS: dict[str, Any] = {
     # edit; and whether every same-size pair is read after each walk.
     "folders.ignore_hour": True,
     "folders.by_content": False,
+    # 1.9: list the files inside each .zip in folder compare.
+    "folders.archives": True,
 
     # Keep `name.ext.orig` beside a file the first time it is saved.
     "save.backup": False,

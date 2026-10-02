@@ -73,6 +73,7 @@ def act(app, page, actions) -> None:
       find=TEXT       open the find bar and type TEXT
       select=S,A,B    select rows A to B on side S
       next            press next difference
+      expand          open every folder of a folder compare
     """
     for action in actions or ():
         name, _, value = action.partition("=")
@@ -84,6 +85,8 @@ def act(app, page, actions) -> None:
             page.view.select_rows(side, first, stop)
         elif name == "next":
             page.view.next_difference()
+        elif name == "expand":
+            page.folders.tree.expandAll()
         else:
             page._command(name)
         for _ in range(3):

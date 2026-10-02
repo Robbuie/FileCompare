@@ -156,6 +156,7 @@ class Options:
     #: 1.8: folder compare's clock settings (`core/folderdiff.py`).
     folder_hour: bool = True
     folder_by_content: bool = False
+    folder_archives: bool = True
     #: "auto" picks a format comparer by extension; "text" never does.
     format: str = "auto"
     #: Whether a detected format comparer starts switched on.

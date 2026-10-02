@@ -14,12 +14,14 @@ finding files is not a dead share; one that has found nothing new for
 
 from __future__ import annotations
 
+import ntpath
 import time
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from app.core import folders
 from app.core.loader import Envelope, Loader
+from app.io import archive as io_archive
 from app.io import handoff as io_handoff
 from app.io import volume
 from app.io import walk as io_walk
@@ -56,6 +58,8 @@ class FolderSession(QObject):
 
     changed = Signal()
     progressed = Signal()
+    #: 1.9: a pair from inside zips, extracted to open: (left, right, titles).
+    extracted = Signal(str, str, object)
     #: 1.0: a line about the sync handed to File Manager -- sent, refused,
     #: finished -- for the status bar.
     handed = Signal(str)
@@ -73,9 +77,12 @@ class FolderSession(QObject):
 
     def __init__(self, loader: Loader, left: str, right: str, *, mask: str = "",
                  timeout: float = 30.0, titles: tuple[str, str] = ("", ""),
-                 hour: bool = True, by_content: bool = False,
+                 hour: bool = True, by_content: bool = False, archives: bool = True,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
+        #: 1.9: list each .zip's members under it.
+        self.archives = archives
+        self._extract_request = 0
         #: 1.8: a same-size pair exactly an hour apart is a clock change.
         self.hour = hour
         #: 1.8: read every same-size pair after each walk, so the verdicts
@@ -175,7 +182,34 @@ class FolderSession(QObject):
         self.by_content = on
         if on and self.tree is not None and not self.busy:
             self.compare_contents(nodes=[n for n in self.tree.walk()
-                                         if n.pair and n.left.size == n.right.size])
+                                         if n.pair and not n.member
+                                         and n.left.size == n.right.size])
+
+    def set_archives(self, on: bool) -> None:
+        """Members of zips listed or not: a walk again, since the walk is
+        what reads them."""
+        if on != self.archives:
+            self.archives = on
+            self.start()
+
+    def open_member(self, node: folders.Node) -> bool:
+        """Extract a pair from inside zips to a temporary folder, off the UI
+        thread; `extracted` says where. False for a node that is not one."""
+        if not node.member or node.is_dir or self._extract_request:
+            return False
+        sides = []
+        for index, entry in enumerate((node.left, node.right)):
+            if entry is None:
+                sides.append(None)
+                continue
+            inner = entry.rel[len(entry.archive) + 1:]
+            sides.append((_join(self.sides[index].path, entry.archive), inner))
+        where = next(s[0] for s in sides if s is not None)
+        self._extract_titles = tuple(
+            f"{ntpath.basename(s[0])}\\{s[1]}" if s is not None else "" for s in sides)
+        self._extract_request = self._loader.submit_io(where, io_archive.extract_pair,
+                                                       sides[0], sides[1])
+        return True
 
     def swap(self) -> None:
         self.sides.reverse()
@@ -191,7 +225,7 @@ class FolderSession(QObject):
             return 0
         chosen = list(nodes) if nodes is not None else folders.content_candidates(
             self.tree, all_pairs=all_pairs)
-        chosen = [n for n in chosen if n.pair]
+        chosen = [n for n in chosen if n.pair and not n.member]
         if not chosen:
             return 0
         left_root, right_root = (s.path for s in self.sides)
@@ -317,7 +351,8 @@ class FolderSession(QObject):
         side.seen = -1
         side.still = 0.0
         side.request = self._loader.submit_io(side.path, io_walk.walk, side.path,
-                                              progress=side.progress)
+                                              progress=side.progress,
+                                              archives=self.archives)
 
     def _tick(self) -> None:
         if self._content_request and self.content is not None:
@@ -389,10 +424,19 @@ class FolderSession(QObject):
                     # every other pair is read.
                     self.compare_contents(nodes=[
                         n for n in self.tree.walk()
-                        if n.pair and n.left.size == n.right.size])
+                        if n.pair and not n.member and n.left.size == n.right.size])
             else:
                 self.problem = f"The comparison failed: {envelope.error}"
             self.changed.emit()
+            return
+        if request == self._extract_request:
+            self._extract_request = 0
+            if envelope.ok:
+                left, right = envelope.value
+                self.extracted.emit(left, right, self._extract_titles)
+            else:
+                self.problem = f"Could not open from the zip: {envelope.error}"
+                self.changed.emit()
             return
         if request == self._content_request:
             self._content_request = 0

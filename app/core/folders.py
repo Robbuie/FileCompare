@@ -83,6 +83,10 @@ class Entry:
     #: 1.0: a junction or symbolic link. Listed, never walked -- and never
     #: copied or removed by a sync, which would act on what it points at.
     is_link: bool = False
+    #: 1.9: for a member of a zip, the zip's own `rel`; its CRC-32 from the
+    #: zip's directory, which settles its content without reading it.
+    archive: str = ""
+    crc: int = -1
 
 
 @dataclass
@@ -117,6 +121,13 @@ class Node:
         """A file on both sides: something a content compare can look at."""
         return (self.left is not None and self.right is not None
                 and not self.left.is_dir and not self.right.is_dir)
+
+    @property
+    def member(self) -> bool:
+        """Inside a zip (1.9): shown and compared, never read as a file on
+        disk, synced, or counted with the folder's own files."""
+        side = self.left or self.right
+        return bool(side and side.archive)
 
     def walk(self) -> Iterable["Node"]:
         stack = list(reversed(self.children))
@@ -196,8 +207,8 @@ def build(left: Iterable[Entry], right: Iterable[Entry], *, mask: Mask | None = 
             excluded.add(entry.rel.lower())
             return False
         if not mask.keeps(name, entry.is_dir):
-            if entry.is_dir:
-                excluded.add(entry.rel.lower())
+            # A file too: a zip left out takes its members with it (1.9).
+            excluded.add(entry.rel.lower())
             return False
         return True
 
@@ -210,7 +221,9 @@ def build(left: Iterable[Entry], right: Iterable[Entry], *, mask: Mask | None = 
                 continue
             if not kept(entry):
                 parent_rel = entry.rel.rpartition("\\")[0]
-                if parent_rel:
+                # A member the mask hid is not on disk; it cannot make the
+                # folder unsafe to sync whole.
+                if parent_rel and not entry.archive:
                     hidden[side].add(parent_rel.lower())
                 continue
             node = node_for(entry.rel)
@@ -248,6 +261,12 @@ def verdict(left: Entry | None, right: Entry | None, tolerance: float = TOLERANC
         return CLASH
     if left.is_dir:
         return SAME
+    if left.archive and right.archive:
+        # Two members of zips: the directory's size and CRC say whether the
+        # bytes agree, so the clock only decides which "same" it is.
+        if left.size != right.size or left.crc != right.crc:
+            return CONTENT_DIFF
+        return SAME if abs(left.mtime - right.mtime) <= tolerance else CONTENT_SAME
     apart = abs(left.mtime - right.mtime)
     if apart <= tolerance:
         return SAME if left.size == right.size else DIFFERENT
@@ -263,6 +282,9 @@ def _judge(node: Node, tolerance: float, hour: bool = False) -> None:
         _judge(child, tolerance, hour)
     own = verdict(node.left, node.right, tolerance, hour) if node.rel else SAME
     if node.rel and not node.is_dir:
+        # A zip's members (1.9) were judged above for showing under it; the
+        # zip itself is still one file with its own verdict, so a folder
+        # counts it once and not once per member.
         node.status = own
         node.files = 1
         node.differing = 1 if own in DIFFERENT_KINDS else 0
@@ -351,6 +373,8 @@ def shown(node: Node, show: str) -> bool:
 def counts(root: Node) -> dict[str, int]:
     totals: dict[str, int] = {}
     for node in root.walk():
+        if node.member:
+            continue
         if node.is_dir:
             if node.status in (ONLY_LEFT, ONLY_RIGHT) and not node.children:
                 totals[node.status] = totals.get(node.status, 0) + 1
@@ -393,7 +417,7 @@ def content_candidates(root: Node, *, all_pairs: bool = False) -> list[Node]:
     """
     out = []
     for node in root.walk():
-        if not node.pair:
+        if not node.pair or node.member:
             continue
         if node.status in (NEWER_LEFT, NEWER_RIGHT, HOUR_APART) \
                 and node.left.size == node.right.size:

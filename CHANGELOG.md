@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.9.0 - inside zip files
+
+- **Folder compare lists the files inside each .zip** under the zip, as
+  if it were a folder, and marks which members are the same, which differ
+  and which are on one side only. A folder of backup zips now shows what
+  changed inside them, not just that the zips differ.
+- Nothing is unpacked to do this. Only the zip's directory is read (a few
+  KB at the end of the file, however big the zip is), and members are
+  compared by the size and checksum stored there.
+- **Enter on a file inside a zip opens it** in a new tab, unpacked into a
+  temporary folder. It opens read-only, since an edit there could not go
+  back into the zip.
+- The zip still counts as one file in the folder's totals, and sync copies
+  the zip whole. Picking a file inside a zip for a sync leaves it alone and
+  says why.
+- Turn it off with **Compare contents > Look inside .zip files**. Only .zip
+  files are opened this way. Word and Excel files and other formats that
+  are zips underneath are compared as documents.
+
 ## 1.8.0 - folder compare and the clock
 
 - **Files the same size whose times are exactly an hour apart now count as

@@ -23,10 +23,11 @@ from __future__ import annotations
 
 import os
 import threading
+import zipfile
 from dataclasses import dataclass, field
 
 from app.core.folders import Entry
-from app.io import longpath
+from app.io import archive, longpath
 
 #: Bytes read at a time when comparing contents.
 CHUNK = 1 << 20
@@ -52,8 +53,10 @@ class Cancelled(Exception):
     pass
 
 
-def walk(root: str, progress: Progress | None = None) -> list[Entry]:
-    """Every folder and file under `root`, with paths relative to it."""
+def walk(root: str, progress: Progress | None = None, archives: bool = False) -> list[Entry]:
+    """Every folder and file under `root`, with paths relative to it. With
+    `archives` (1.9), each .zip's members too, under the zip's own path; a
+    zip that cannot be read as one is listed as the file it is."""
     progress = progress or Progress()
     out: list[Entry] = []
     top = longpath.api(root)
@@ -91,6 +94,11 @@ def walk(root: str, progress: Progress | None = None) -> list[Entry]:
             out.append(Entry(rel=child, is_dir=False, size=info.st_size, mtime=info.st_mtime,
                              is_link=link))
             progress.files += 1
+            if archives and not link and archive.is_archive(item.name):
+                try:
+                    out.extend(archive.members(item.path, child))
+                except (OSError, ValueError, zipfile.BadZipFile, RuntimeError):
+                    pass
     progress.done = True
     return out
 

@@ -273,6 +273,7 @@ class MainWindow(QMainWindow):
             folder_mask=str(self._config.get("folders.mask") or ""),
             folder_hour=bool(self._config.get("folders.ignore_hour")),
             folder_by_content=bool(self._config.get("folders.by_content")),
+            folder_archives=bool(self._config.get("folders.archives")),
             mode=mode,
             format="text" if mode == "text" else "auto",
             syntax="auto" if self._config.get("view.syntax") else "off",
@@ -282,6 +283,8 @@ class MainWindow(QMainWindow):
         self._remember(left, right)
         tab = CompareTab(session, self._tokens)
         tab.openPair.connect(lambda l, r: self.compare(l, r))
+        tab.openExtracted.connect(lambda l, r, titles: self.compare(
+            l, r, titles=tuple(titles), readonly={"left", "right"}))
         tab.titleChanged.connect(lambda t=tab: self._retitle(t))
         tab.status.connect(lambda text, t=tab: self._tab_status(t, text))
         tab.setting.connect(self._config.set)

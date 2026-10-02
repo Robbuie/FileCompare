@@ -79,6 +79,7 @@ HOLDS_LINK = "holds a link or junction"
 HOLDS_UNREAD = "holds something that could not be read"
 HOLDS_HIDDEN = "holds files the name filter hides"
 NO_FOLDER = "its folder is not on the target; copy the folder"
+INSIDE_ZIP = "inside a zip; sync the zip itself"
 
 
 @dataclass(frozen=True)
@@ -137,7 +138,7 @@ def _files_under(node: F.Node, direction: str, *, source: bool = True) -> tuple[
     files = size = 0
     for child in node.walk():
         entry = _sides(child, direction)[0 if source else 1]
-        if entry is not None and not entry.is_dir:
+        if entry is not None and not entry.is_dir and not entry.archive:
             files += 1
             size += entry.size
     return files, size
@@ -288,6 +289,11 @@ def plan(root: F.Node, direction: str, mode: str, *,
     rows (and, for update and mirror, what is under them)."""
     result = Plan(direction=direction, mode=mode)
     tops = _tops(nodes) if nodes is not None else list(root.children)
+    # 1.9: a zip's members are listed, not files on disk. A picked one is
+    # said to be left alone; a sync of the zip copies the zip whole.
+    for node in [n for n in tops if n.member]:
+        result.actions.append(Action(ACT_SKIP, node.rel, INSIDE_ZIP, is_dir=node.is_dir))
+    tops = [n for n in tops if not n.member]
     if mode == REMOVE:
         # Remove from the side the direction points at -- "to right" removes
         # from the right -- so the one control means the same thing everywhere.
