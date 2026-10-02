@@ -298,6 +298,13 @@ or the formulas. The old binary `.xls` is compared as bytes and says why.
   change on every export, compare rung by rung within a routine, and name
   differences by program, routine, rung and tag rather than by line number.
   File Manager's `app/io/logix.py` already reads these; its lessons apply.
+- **L5K (1.7)** -- the text form of the same export, read into its blocks and
+  `;` statements by `core/formats/l5k.py` and written out in the same shape
+  as the L5X comparer's: one line per attribute, sorted collections, rung
+  numbers in the crumb, module data as a hash, the header comment ignored.
+  The reader is forgiving -- an unknown block is kept if the file closes it,
+  a statement missing its `;` ends at its block's END_ line -- and a file
+  with no CONTROLLER block is refused and compared as text.
 - **XML** -- attribute order and insignificant whitespace ignored.
 - **JSON / INI** -- key order ignored.
 

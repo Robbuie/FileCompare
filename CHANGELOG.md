@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.7.0 - L5K exports by structure
+
+- **L5K files now compare the way L5X files do.** Programs, routines, tags,
+  modules, data types and tasks are lined up by name, so a routine or tag
+  that moved in the export is not a difference. Each difference is named by
+  program, routine and rung ("Program MainProgram / MainRoutine / Rung 0")
+  instead of by line number.
+- Each block's attributes get a line of their own, so a changed watchdog or
+  module revision is one short line that names itself, not a change
+  somewhere in a long parenthesised list.
+- Inserting a rung doesn't make every rung below it a difference, because
+  rung numbers aren't part of the compared text.
+- A module's configuration data is shown as a short fingerprint: a change
+  shows which module it's in, without forty lines of numbers.
+- Ignored, as the status line says: the header comment with the export date,
+  and the created and edited dates and users on blocks. **Structure** turns
+  it off to see and edit the file as plain text.
+
 ## 1.6.0 - align lines by hand
 
 - **When the automatic diff lines up the wrong lines, you can say which go

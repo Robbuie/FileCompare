@@ -29,10 +29,10 @@ from dataclasses import dataclass, field
 
 PLAIN = "text"
 
-#: Comparers that start switched on. An L5X is never read as text on
+#: Comparers that start switched on. An L5X or L5K is never read as text on
 #: purpose; an XML, JSON or INI file usually is, and is edited, so for those
 #: the Structure switch is offered and left off.
-DEFAULT_ON = frozenset({"l5x"})
+DEFAULT_ON = frozenset({"l5x", "l5k"})
 
 
 @dataclass
@@ -48,8 +48,8 @@ class Formatted:
 
 def names() -> dict[str, str]:
     """Format id -> the label the tab's switch shows."""
-    return {"l5x": "Logix structure", "xml": "XML structure", "json": "JSON structure",
-            "ini": "INI structure"}
+    return {"l5x": "Logix structure", "l5k": "Logix structure", "xml": "XML structure",
+            "json": "JSON structure", "ini": "INI structure"}
 
 
 def detect(*paths: str) -> str:
@@ -65,6 +65,8 @@ def _by_extension(path: str) -> str:
     ext = base.rsplit(".", 1)[-1].lower() if "." in base else ""
     if ext == "l5x":
         return "l5x"
+    if ext == "l5k":
+        return "l5k"
     if ext in ("xml", "config", "csproj", "vbproj", "resx", "xaml", "svg", "manifest",
                "props", "targets", "xsd", "wsdl", "plist"):
         return "xml"
@@ -83,6 +85,9 @@ def normalise(kind: str, lines: list[str]) -> Formatted:
         if kind == "l5x":
             from app.core.formats import l5x
             return l5x.normalise(text)
+        if kind == "l5k":
+            from app.core.formats import l5k
+            return l5k.normalise(text)
         if kind == "xml":
             from app.core.formats import xmlfmt
             return xmlfmt.normalise(text)
