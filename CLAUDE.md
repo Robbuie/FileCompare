@@ -70,6 +70,9 @@ python -m app                           # empty window, the start page
 python -m app left.txt right.txt        # a text compare
 python -m app C:\A D:\B                 # two folders: says folder compare is not here yet
 
+python -m app a.L5K b.L5K --report r.html                  # 1.11: no window; exit 0/1/2
+python -m app C:\A D:\B --report r.html                    # folder report
+python -m app saved.fcsession --report r.patch             # a session's paths and rules
 python -m app.harness diff left.txt right.txt              # the engine alone, as text
 python -m app.harness diff a.log b.log --time              # counts and timing only
 python -m app.harness diff a.ini b.ini --whitespace all --case --blank --pattern "ExportDate=\"[^\"]*\""
@@ -333,6 +336,17 @@ start page's Open session -- is read by `io/sessionfile.py` in the loader,
 and its settings go over the application's own through
 `MainWindow._compare_page(saved=)`. `loads` refuses a newer version and
 ignores keys it does not know.
+
+**Command-line report (1.11)** -- `--report PATH` runs `app/batch.py`
+before Qt is created and exits: no window, no hand-over to a running one.
+Two files give the text report (HTML, or a unified patch for .patch/.diff)
+through the format comparer when it is on by default; two folders give a
+folder report of every differing row, with the size-and-time-undecided
+pairs always read; one `.fcsession` supplies paths and rules. Exit 0 same,
+1 different, 2 failed -- and a failure still writes a page saying why.
+Reads directly, not through the loader: nothing to keep responsive, and a
+test proves the path never imports PySide6. `rules.from_config` is shared
+with the window so a report says what the window would.
 
 **Handed to a sibling rather than rebuilt here:**
 - PDF revisions go to **Redline PDF**, whose compare engine already handles

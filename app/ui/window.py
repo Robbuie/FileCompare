@@ -36,7 +36,8 @@ from app.cli import Request
 from app.core import appearance, formats, savedsession, updates
 from app.core.config import Config
 from app.core.loader import Loader
-from app.core.rules import WHITESPACE, Rules
+from app.core.rules import Rules
+from app.core.rules import from_config as rules_from_config
 from app.core.session import Options, Session
 from app.io import sessionfile
 from app.theme import sheet
@@ -79,15 +80,8 @@ F1                        this list"""
 
 
 def rules_from(config: Config) -> Rules:
-    whitespace = config.get("compare.whitespace")
-    patterns = config.get("compare.patterns")
-    return Rules(
-        whitespace=whitespace if whitespace in WHITESPACE else "none",
-        case=bool(config.get("compare.case")),
-        blank_lines=bool(config.get("compare.blank_lines")),
-        comments=bool(config.get("compare.comments")),
-        patterns=tuple(p for p in patterns if isinstance(p, str)) if isinstance(patterns, list) else (),
-    )
+    # Moved to core in 1.11, where the command-line report reads it too.
+    return rules_from_config(config)
 
 
 class MainWindow(QMainWindow):

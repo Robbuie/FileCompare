@@ -18,10 +18,20 @@ def main() -> int:
     argv = sys.argv[1:]
     cwd = os.getcwd()
 
+    from app import cli
+
+    request = cli.parse(argv, cwd)
+    if request.report:
+        # 1.11: no window, no hand-over to one -- a report and an exit code.
+        from app import batch
+        from app.core.config import Config
+
+        return batch.run(request, Config.load())
+
     from PySide6.QtCore import QCoreApplication, Qt
     from PySide6.QtWidgets import QApplication
 
-    from app import __version__, cli
+    from app import __version__
     from app.core import appearance, instance
     from app.core.config import Config
     from app.ui.window import MainWindow
@@ -31,7 +41,6 @@ def main() -> int:
     app.setApplicationName("File Compare")
     app.setApplicationVersion(__version__)
 
-    request = cli.parse(argv, cwd)
     if not request.wait and instance.hand_over(argv, cwd):
         return 0
 

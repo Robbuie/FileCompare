@@ -176,3 +176,19 @@ def comment_markers(path: str) -> tuple[str, ...]:
         if ext in extensions:
             return markers
     return ()
+
+
+def from_config(config) -> Rules:
+    """The rules the settings file holds (`core/config.Config`), for a new
+    comparison: what Options last set, read by the window and by the
+    command-line report alike."""
+    whitespace = config.get("compare.whitespace")
+    patterns = config.get("compare.patterns")
+    return Rules(
+        whitespace=whitespace if whitespace in WHITESPACE else "none",
+        case=bool(config.get("compare.case")),
+        blank_lines=bool(config.get("compare.blank_lines")),
+        comments=bool(config.get("compare.comments")),
+        patterns=tuple(p for p in patterns if isinstance(p, str))
+        if isinstance(patterns, list) else (),
+    )

@@ -12,6 +12,9 @@ not to code.
     FileCompare.exe <left> <right> --mode text
     FileCompare.exe --merge <mine> <theirs> <base> -o <output>
     FileCompare.exe <left> <right> --wait         stay until closed (git difftool)
+    FileCompare.exe <left> <right> --report out.html   no window: write a report and
+                                              exit 0 same, 1 different, 2 failed
+    FileCompare.exe x.fcsession --report out.html      the same, from a session
     FileCompare.exe --select-left <path>      Explorer's "Select left side"
     FileCompare.exe --with-left <path>        Explorer's "Compare to left side"
 
@@ -49,6 +52,8 @@ class Request:
     #: Explorer's verbs: remember a left side, or compare against it.
     select_left: str = ""
     with_left: str = ""
+    #: 1.11: write a report here and exit, without a window (`app/batch.py`).
+    report: str = ""
     error: str = ""
 
     @property
@@ -75,6 +80,7 @@ def _parser() -> _Parser:
     parser.add_argument("--wait", action="store_true")
     parser.add_argument("--select-left", default="")
     parser.add_argument("--with-left", default="")
+    parser.add_argument("--report", default="")
     return parser
 
 
@@ -96,6 +102,7 @@ def parse(argv: list[str], cwd: str = "") -> Request:
         output=resolve(args.output, cwd) if args.output else "",
         select_left=resolve(args.select_left, cwd) if args.select_left else "",
         with_left=resolve(args.with_left, cwd) if args.with_left else "",
+        report=resolve(args.report, cwd) if args.report else "",
     )
     for side in args.readonly:
         request.readonly.update(("left", "right") if side == "both" else (side,))
@@ -104,6 +111,9 @@ def parse(argv: list[str], cwd: str = "") -> Request:
             request.error = "--merge takes three files: mine, theirs and base"
     elif len(request.paths) > 2:
         request.error = f"Two paths to compare, not {len(request.paths)}"
+    elif request.report and not (len(request.paths) == 2 or (
+            len(request.paths) == 1 and request.paths[0].lower().endswith(".fcsession"))):
+        request.error = "--report needs two paths to compare, or one session file"
     return request
 
 

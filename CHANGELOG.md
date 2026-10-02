@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.11.0 - reports from the command line
+
+- **`FileCompare.exe A B --report out.html` compares without opening a
+  window**, writes the report and exits. It's meant for scheduled checks,
+  such as last night's backup against the office copy, or the running
+  program against the last good export.
+- **The exit code says what was found:** 0 the same, 1 different, 2 could
+  not compare (a side missing or unreadable). When it fails it still writes
+  the report, saying why, so the file left behind explains the code.
+- Two files give the same HTML report as Ctrl+Shift+H, or a patch when the
+  name ends in `.patch` or `.diff`. L5X and L5K pairs are compared by
+  structure.
+- **Two folders give a folder report**: every file that differs, with sizes
+  and times, including files inside zips. Pairs whose size and time can't
+  settle it are always read, so the report doesn't list a file whose only
+  difference is its timestamp.
+- **A session file can stand in for the two paths:**
+  `FileCompare.exe weekly.fcsession --report out.html` uses that session's
+  paths, rules and folder settings. Otherwise the rules are the ones last
+  set in Options.
+- From a batch file, use `start /wait "" FileCompare.exe ...` so it waits
+  for the exit code. A scheduled task waits on its own.
+
 ## 1.10.0 - saved sessions
 
 - **Ctrl+Alt+S saves a comparison's setup as a session file**
