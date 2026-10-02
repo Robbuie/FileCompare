@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.5.0 - moved blocks
+
+- **A block that was cut and pasted elsewhere is shown as a move**, not as
+  lines removed in one place and unrelated lines added in another. Both ends
+  are drawn in the move colour (violet) in the panes, the gutter and the
+  overview map, and the status line counts them as moved.
+- The difference line says where the other end is ("Moved: 6 lines, now at
+  right 18"), and **Ctrl+M** jumps there and back.
+- One line can be a move when it is long enough, so a rung that moved in a
+  normalised L5X export shows as moved. Short lines such as `END_IF;` or `}`
+  are not, since those turning up in two places is usually coincidence.
+- The ignore rules apply: with whitespace ignored, a block that moved and was
+  reindented is still a move.
+- HTML reports colour moved lines and count them.
+
 ## 1.4.3 - the installed app starts
 
 - **1.4.2 installed but would not start**: "No module named

@@ -54,6 +54,10 @@ def _diff(args: argparse.Namespace) -> int:
             first = max(0, block.start - args.context)
             last = min(len(result.rows), block.end + args.context)
             label = "ignored" if not block.significant else align.KIND_NAMES[block.kind]
+            if block.move >= 0:
+                move = result.moves[block.move]
+                label = (f"moved to right {move.right[0] + 1}" if number - 1 == move.left_block
+                         else f"moved from left {move.left[0] + 1}")
             print(f"--- {number}: rows {block.start + 1}-{block.end} ({label})")
             for row in range(first, last):
                 i, j, kind = result.rows[row]

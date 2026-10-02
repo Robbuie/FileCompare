@@ -18,5 +18,6 @@ from app.core.diff.align import (  # noqa: F401
     NONE,
     Block,
     Comparison,
+    Move,
     compare,
 )

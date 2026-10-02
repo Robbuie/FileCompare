@@ -15,6 +15,14 @@ opposite whatever happened to be at the same offset, and every intraline mark
 after that is nonsense; what is left between two similar pairs is paired by
 position, because a line replaced by something unrecognisable is still that
 line, edited.
+
+**Moved blocks (1.5).** A run of lines removed in one place and the same run
+added in another is a move, and is reported as one: each end becomes its own
+block whose `move` names the entry in `Comparison.moves` that pairs it with
+the other end. The rows keep their kinds -- the left end is still lines only
+on the left, and copying it across still inserts them -- so everything that
+reads kinds keeps working, and only what draws or counts a block asks whether
+it moved. See `_moves` for what is and is not called a move.
 """
 
 from __future__ import annotations
@@ -43,6 +51,21 @@ KIND_NAMES = {EQUAL: "equal", CHANGED: "changed", DELETED: "deleted",
 #: region. Below it they are a removal and an addition, not an edit.
 PAIR_THRESHOLD = 0.5
 
+#: A move has to carry at least this much text, counted without the
+#: whitespace at either end of each line. One line is enough when it is long
+#: enough -- a rung of a normalised L5X export is one line, and a rung that
+#: moved is the commonest move there is -- but a lone `end;` or `}` that
+#: happens to appear removed in one place and added in another is coincidence.
+MOVE_MIN_CHARS = 16
+
+#: Right-side positions tried per removed line when looking for where it went.
+#: A line repeated a thousand times is not going to locate a move anyway.
+MOVE_CANDIDATES = 64
+
+#: Line comparisons spent looking for moves before giving up on the rest, so a
+#: pathological file costs a bounded fraction of a second and not minutes.
+MOVE_BUDGET = 2_000_000
+
 #: Pairing by similarity is quadratic in the region; past this many line pairs
 #: a region is paired by position instead. A 60-line rewrite is 3,600 pairs.
 PAIR_LIMIT = 3600
@@ -62,6 +85,25 @@ class Block:
     end: int        # one past the last row
     kind: int       # CHANGED if mixed or on both sides, else the one kind
     significant: bool
+    move: int = -1  # index into `Comparison.moves` when this is one end of a move
+
+
+@dataclass(frozen=True)
+class Move:
+    """A run of lines removed in one place and added unchanged in another.
+
+    Line ranges are `(first, stop)` on each side; the blocks are the indexes
+    of the two ends in `Comparison.blocks`.
+    """
+
+    left: tuple[int, int]
+    right: tuple[int, int]
+    left_block: int
+    right_block: int
+
+    @property
+    def size(self) -> int:
+        return self.left[1] - self.left[0]
 
 
 @dataclass
@@ -71,6 +113,7 @@ class Comparison:
     left_count: int = 0
     right_count: int = 0
     elapsed: float = 0.0
+    moves: list[Move] = field(default_factory=list)
 
     @property
     def differences(self) -> list[Block]:
@@ -87,11 +130,37 @@ class Comparison:
         return not self.blocks
 
     def counts(self) -> dict[str, int]:
-        """Line counts by kind, for the status bar."""
+        """Line counts by kind, for the status bar.
+
+        A moved line is counted once, as moved, and not also as a line only
+        on the left and another only on the right."""
         totals = {name: 0 for name in KIND_NAMES.values()}
         for _l, _r, kind in self.rows:
             totals[KIND_NAMES[kind]] += 1
+        moved = sum(move.size for move in self.moves)
+        totals["deleted"] -= moved
+        totals["inserted"] -= moved
+        totals["moved"] = moved
         return totals
+
+    def moved_rows(self) -> set[int]:
+        """Every row that is one end of a move."""
+        out: set[int] = set()
+        for block in self.blocks:
+            if block.move >= 0:
+                out.update(range(block.start, block.end))
+        return out
+
+    def partner(self, block_index: int) -> int | None:
+        """The block at the other end of the move `block_index` is one end
+        of, or None when it is not part of a move."""
+        if not 0 <= block_index < len(self.blocks):
+            return None
+        move_index = self.blocks[block_index].move
+        if move_index < 0:
+            return None
+        move = self.moves[move_index]
+        return move.right_block if block_index == move.left_block else move.left_block
 
     def block_at(self, row: int) -> int | None:
         """Index into `blocks` of the block containing `row`, or None."""
@@ -160,7 +229,9 @@ def compare(left: Sequence[str], right: Sequence[str],
             a, b = i + 1, j + 1
     _gap(rows, left, right, a, len(left), b, len(right), rules)
 
-    result = Comparison(rows=rows, blocks=_blocks(rows),
+    found = _moves(rows, left_keys, right_keys, left, right)
+    blocks, moves = _blocks_with_moves(rows, found)
+    result = Comparison(rows=rows, blocks=blocks, moves=moves,
                         left_count=len(left), right_count=len(right))
     result.elapsed = time.perf_counter() - began
     return result
@@ -287,26 +358,135 @@ def _pair(left: Sequence[str], right: Sequence[str],
     return out
 
 
-def _blocks(rows: list[Row]) -> list[Block]:
+def _moves(rows: list[Row], left_keys: Sequence[int], right_keys: Sequence[int],
+           left: Sequence[str], right: Sequence[str]) -> list[tuple[int, int, int]]:
+    """Runs of removed lines that turn up, in the same order, among the added
+    ones: `(left first, right first, length)`.
+
+    Only lines the diff left on one side are candidates. A line that was
+    paired with an edit of itself stays an edit; a move is what is left over
+    when nothing else explained a removal and an addition. Lines are compared
+    by the same normalised keys the diff used, so a block that moved and was
+    reindented is still a move when whitespace is being ignored.
+
+    Greedy, longest first from each removed line, top to bottom. That is not
+    the optimum over every way of cutting the runs up, and does not need to
+    be: a move is a block somebody cut and pasted, and the greedy match finds
+    the whole of it.
+    """
+    removed = {i for i, _j, kind in rows if kind == DELETED}
+    added = {j for _i, j, kind in rows if kind == INSERTED}
+    if not removed or not added:
+        return []
+    where: dict[int, list[int]] = {}
+    for j in sorted(added):
+        where.setdefault(right_keys[j], []).append(j)
+    taken_left: set[int] = set()
+    taken_right: set[int] = set()
+    found: list[tuple[int, int, int]] = []
+    budget = MOVE_BUDGET
+    for i in sorted(removed):
+        if i in taken_left:
+            continue
+        best_n, best_j = 0, -1
+        for j in where.get(left_keys[i], ())[:MOVE_CANDIDATES]:
+            if j in taken_right:
+                continue
+            n = 0
+            while (i + n in removed and j + n in added and i + n not in taken_left
+                   and j + n not in taken_right
+                   and left_keys[i + n] == right_keys[j + n]):
+                n += 1
+            budget -= n + 1
+            if n > best_n:
+                best_n, best_j = n, j
+        if budget <= 0:
+            break
+        if best_n == 0:
+            continue
+        weight = sum(len(left[k].strip()) for k in range(i, i + best_n))
+        if weight < MOVE_MIN_CHARS:
+            continue
+        found.append((i, best_j, best_n))
+        taken_left.update(range(i, i + best_n))
+        taken_right.update(range(best_j, best_j + best_n))
+    return found
+
+
+def _blocks_with_moves(rows: list[Row], found: list[tuple[int, int, int]]
+                       ) -> tuple[list[Block], list[Move]]:
+    """The blocks, with each end of each move cut out as a block of its own,
+    and the moves pointing at those blocks."""
+    if not found:
+        return _blocks(rows), []
+    group: dict[int, int] = {}
+    left_row = {i: r for r, (i, _j, kind) in enumerate(rows) if kind == DELETED}
+    right_row = {j: r for r, (_i, j, kind) in enumerate(rows) if kind == INSERTED}
+    for number, (i, j, n) in enumerate(found):
+        for k in range(n):
+            group[left_row[i + k]] = number
+            group[right_row[j + k]] = number
+    blocks = _blocks(rows, group)
+    ends: dict[int, list[int]] = {}
+    for index, block in enumerate(blocks):
+        if block.move >= 0:
+            ends.setdefault(block.move, []).append(index)
+    moves: list[Move] = []
+    renumber: dict[int, int] = {}
+    for number, (i, j, n) in enumerate(found):
+        pair = ends.get(number, [])
+        # Each end is contiguous in the rows by construction; if that ever
+        # stopped being true the move would be in pieces, and a move in
+        # pieces is better shown as what it is underneath.
+        if len(pair) != 2:
+            continue
+        left_block = next(b for b in pair if rows[blocks[b].start][2] == DELETED)
+        right_block = next(b for b in pair if rows[blocks[b].start][2] == INSERTED)
+        renumber[number] = len(moves)
+        moves.append(Move((i, i + n), (j, j + n), left_block, right_block))
+    out = []
+    for block in blocks:
+        if block.move >= 0:
+            block = Block(block.start, block.end, block.kind, block.significant,
+                          renumber.get(block.move, -1))
+        out.append(block)
+    return out, moves
+
+
+def _blocks(rows: list[Row], group: dict[int, int] | None = None) -> list[Block]:
+    """Runs of rows that are not equal. With `group`, a row's move number:
+    a change of group ends one block and starts the next, so each end of a
+    move is a block by itself."""
+    group = group or {}
     blocks: list[Block] = []
     start = None
+    current = -1
     kinds: set[int] = set()
+
+    def close(stop: int) -> None:
+        real = kinds - {IGNORED}
+        if not real:
+            summary = IGNORED
+        elif len(real) == 1:
+            summary = next(iter(real))
+        else:
+            summary = CHANGED
+        blocks.append(Block(start, stop, summary, bool(real), current))
+
     for index, (_l, _r, kind) in enumerate(rows + [(0, 0, EQUAL)]):
         if kind != EQUAL:
+            here = group.get(index, -1)
+            if start is not None and here != current:
+                close(index)
+                start = None
             if start is None:
                 start = index
+                current = here
                 kinds = set()
             kinds.add(kind)
             continue
         if start is not None:
-            real = kinds - {IGNORED}
-            if not real:
-                summary = IGNORED
-            elif len(real) == 1:
-                summary = next(iter(real))
-            else:
-                summary = CHANGED
-            blocks.append(Block(start, index, summary, bool(real)))
+            close(index)
             start = None
     return blocks
 

@@ -51,6 +51,7 @@ Up, Down, PgUp, PgDn      move; with Shift, select lines
 Ctrl+Up / Ctrl+Down       scroll without moving
 Left / Right              scroll sideways
 Tab                       the other side
+Ctrl+M                    the other end of a moved block
 Alt+Right / Alt+Left      copy this difference right, left
 Ctrl+Alt+Right / Left     copy everything right, left
 Enter, F2, double-click   edit the selected lines (Ctrl+Enter keeps, Esc drops)

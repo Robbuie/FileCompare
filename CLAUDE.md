@@ -248,8 +248,12 @@ by what was opened and can be switched from the tab's header.
   copy all, copy a single line.
 - Rules: ignore whitespace (leading, trailing, all), case, line endings, blank
   lines, and regex "unimportant" text shown in grey rather than hidden.
-- Moved-block detection shown as its own kind rather than as a delete plus an
-  add.
+- Moved-block detection (1.5): a run removed in one place and added unchanged
+  in another is one move with two ends, drawn in the move colour, counted as
+  moved rather than as lines only on each side, and Ctrl+M goes from one end
+  to the other. The rows keep their DELETED and INSERTED kinds; a block's
+  `move` and `Comparison.moves` carry the pairing. A move needs at least
+  `MOVE_MIN_CHARS` of text, so one L5X rung counts and a lone `end;` does not.
 - Syntax colour (1.1) by the file's name, about six hundred languages
   through Pygments and L5K and Structured Text through our own lexers; a
   language menu in the toolbar picks another or none.
@@ -397,6 +401,7 @@ for the same idea, it is the same key.
 ```
 Alt+Down / Alt+Up      next, previous difference
 Ctrl+Alt+Down / Up     next, previous conflict (three-way)
+Ctrl+M                 the other end of a moved block (1.5)
 Alt+Right / Alt+Left   copy this block to the right, to the left
 Ctrl+Alt+Right / Left  copy all differences across
 Home / End             first, last difference (from the overview map)
@@ -654,7 +659,7 @@ made in a worker, not in the argument parser.
 10. Later: saved sessions, archive compare, folder sync actions (see Open
     decisions), Excel tables (needs `openpyxl`), the one-column inline view
     (Ctrl+Shift+I is reserved for it), moved-block detection, syntax colour
-    (needs `Pygments`).
+    (needs `Pygments`). Moved blocks shipped in 1.5.
 
 ## Open decisions
 

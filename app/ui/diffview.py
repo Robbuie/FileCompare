@@ -73,6 +73,10 @@ class ViewState:
     #: before a new lexing arrives, and old colours on new lines would be
     #: colours on the wrong words.
     syntax: list = field(default_factory=lambda: [None, None])
+    #: 1.5: rows that are one end of a move, and the comparison that says
+    #: where the other end is.
+    moved: set = field(default_factory=set)
+    comparison: object = None
 
     def syntax_spans(self, side: int, index: int):
         held = self.syntax[side]
@@ -252,6 +256,7 @@ class TextPane(_Painted):
             align.CHANGED: self.colour("diff_chg_mark"),
             align.IGNORED: self.colour("diff_ignored_mark"),
         }
+        moved_wash = self.colour("diff_moved_row")
         filler = self.colour("diff_filler")
         ink = self.colour("txt_0")
         muted = self.colour("txt_2")
@@ -282,7 +287,8 @@ class TextPane(_Painted):
                 painter.fillRect(band, filler)
                 continue
             if kind != align.EQUAL:
-                wash = washes.get(kind)
+                moved = row in s.moved
+                wash = moved_wash if moved else washes.get(kind)
                 if kind in (align.DELETED, align.INSERTED) and kind != own_only:
                     wash = None
                 if wash is not None:
@@ -290,7 +296,7 @@ class TextPane(_Painted):
                     # The line number column carries the colour too, so a
                     # change is visible with the text scrolled away from it.
                     painter.fillRect(QRectF(0, y, 3, self.row_h), self.colour(
-                        _bar_name(kind)))
+                        "diff_moved_bar" if moved else _bar_name(kind)))
             if kind in mark_colours:
                 spans = s.spans(row)[side]
                 if spans:
@@ -390,6 +396,14 @@ def _bar_name(kind: int) -> str:
             align.INSERTED: "diff_add_bar", align.IGNORED: "diff_ignored_bar"}[kind]
 
 
+def _block_bar(block) -> str:
+    """A block's colour: its kind's, or the move colour for either end of a
+    move. Hex view blocks have no `move`, hence the default."""
+    if getattr(block, "move", -1) >= 0:
+        return "diff_moved_bar"
+    return _bar_name(block.kind)
+
+
 class Gutter(_Painted):
     """Between the panes: which rows differ, and the arrows that copy across.
 
@@ -446,7 +460,7 @@ class Gutter(_Painted):
                 continue
             top = (max(block.start, s.first) - s.first) * self.row_h
             bottom = (min(block.end, end) - s.first) * self.row_h
-            colour = self.colour(_bar_name(block.kind))
+            colour = self.colour(_block_bar(block))
             current = block_index == s.current
             width = 6 if current else 4
             painter.fillRect(QRectF(mid - width / 2, top + 1, width, max(2, bottom - top - 2)),
@@ -513,7 +527,7 @@ class DiffMap(QWidget):
             y0 = 2 + block.start / total * height
             y1 = 2 + block.end / total * height
             box_h = max(2.0, y1 - y0)
-            colour = parse_colour(self.tokens.get(_bar_name(block.kind)))
+            colour = parse_colour(self.tokens.get(_block_bar(block)))
             left, right = self._sides(block)
             if left:
                 painter.fillRect(QRectF(2, y0, column, box_h), colour)
@@ -699,6 +713,8 @@ class DiffView(QWidget):
         self.editor.finish(True) if not self.editor.isHidden() else None
         self.state.rows = comparison.rows
         self.state.blocks = comparison.blocks
+        self.state.moved = comparison.moved_rows()
+        self.state.comparison = comparison
         self.state.lines = (left, right)
         self.state.mode = mode
         self.state.marks = {}
@@ -776,6 +792,18 @@ class DiffView(QWidget):
             self.scroll_to(block.start - int(visible * LANDING))
         self.update_all()
         self.currentChanged.emit()
+
+    def go_to_partner(self) -> bool:
+        """Ctrl+M: from one end of a move to the other. False when the
+        current difference is not part of a move."""
+        comparison = self.state.comparison
+        if comparison is None or self.state.current is None:
+            return False
+        other = comparison.partner(self.state.current)
+        if other is None:
+            return False
+        self.go(other)
+        return True
 
     def _index_of_nth_difference(self, n: int) -> int | None:
         found = [i for i, b in enumerate(self.state.blocks) if b.significant]
@@ -979,6 +1007,7 @@ class DiffView(QWidget):
         (Qt.NoModifier, Qt.Key_F2): "edit",
         (Qt.ShiftModifier, Qt.Key_Return): "insert-line",
         (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_H): "report",
+        (Qt.ControlModifier, Qt.Key_M): "move-partner",
     }
 
     def keyPressEvent(self, event) -> None:  # noqa: N802

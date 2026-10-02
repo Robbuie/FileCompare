@@ -659,6 +659,9 @@ class CompareTab(QWidget):
             self.status.emit(f"Copied {count} line{'s' if count != 1 else ''}")
         elif name == "report":
             self.save_report()
+        elif name == "move-partner":
+            if not self.view.go_to_partner():
+                self.status.emit("This difference is not a moved block")
         elif name == "select-all":
             if self.view.state.rows:
                 self.view.select_rows(side, 0, len(self.view.state.rows))
@@ -1390,6 +1393,9 @@ class CompareTab(QWidget):
             noun = "difference" if total == 1 else "differences"
             text = (f"Difference {current} of {total}" if current
                     else f"{total} {noun}")
+            moved = self._moved_note()
+            if current and moved:
+                text += f"  ·  {moved}"
             crumb = self._crumb()
             if current and crumb:
                 text += f"  ·  {crumb}"
@@ -1401,6 +1407,23 @@ class CompareTab(QWidget):
         self.heads[1].set_focused(self.view.focused_side == 1)
         if result is not None:
             self.status.emit(self._status_line(result))
+
+    def _moved_note(self) -> str:
+        """For one end of a move: where the other end is, by line number,
+        since that is what a person scrolls to."""
+        s = self.session
+        index = self.view.state.current
+        if index is None or not s.result or index >= len(s.result.blocks):
+            return ""
+        move_index = s.result.blocks[index].move
+        if move_index < 0:
+            return ""
+        move = s.result.moves[move_index]
+        lines = move.size
+        noun = "line" if lines == 1 else f"{lines} lines"
+        if index == move.left_block:
+            return f"Moved: {noun}, now at right {move.right[0] + 1} (Ctrl+M)"
+        return f"Moved: {noun}, was at left {move.left[0] + 1} (Ctrl+M)"
 
     def _crumb(self) -> str:
         """Where the current difference is in the file's structure, when a
@@ -1434,6 +1457,8 @@ class CompareTab(QWidget):
         parts = []
         if counts["changed"]:
             parts.append(f"{counts['changed']:,} changed")
+        if counts.get("moved"):
+            parts.append(f"{counts['moved']:,} moved")
         if counts["deleted"]:
             parts.append(f"{counts['deleted']:,} only left")
         if counts["inserted"]:

@@ -36,6 +36,7 @@ td.n { width: 44px; text-align: right; color: #7b838f; border-left: none; }
 tr.gap td { background: #f1f2f5; color: #7b838f; text-align: center; padding: 2px; }
 tr.chg td.t { background: #fdf1dc; } tr.del td.l { background: #fbe4e2; }
 tr.ins td.r { background: #e2f6ec; } tr.ign td.t { color: #7b838f; }
+tr.mov td.t { background: #ece6ff; }
 td.fill { background: #f4f5f7; }
 th { text-align: left; font-weight: 600; padding: 6px; border-bottom: 1px solid #d5d9e0; }
 """
@@ -52,7 +53,8 @@ def html_report(result: align.Comparison, left: list[str], right: list[str], *,
     counts = result.counts()
     summary = (f"{len(result.differences)} difference{'s' if len(result.differences) != 1 else ''}"
                f" &middot; {counts['changed']} changed &middot; {counts['deleted']} only left"
-               f" &middot; {counts['inserted']} only right")
+               f" &middot; {counts['inserted']} only right"
+               + (f" &middot; {counts['moved']} moved" if counts.get("moved") else ""))
     now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     out = [
         "<!doctype html><html><head><meta charset=\"utf-8\">",
@@ -67,6 +69,7 @@ def html_report(result: align.Comparison, left: list[str], right: list[str], *,
         f"<th>{html.escape(names[1])}</th></tr>",
     ]
     rows = result.rows
+    moved = result.moved_rows()
     shown = set()
     for block in result.blocks:
         for r in range(max(0, block.start - CONTEXT), min(len(rows), block.end + CONTEXT)):
@@ -81,6 +84,8 @@ def html_report(result: align.Comparison, left: list[str], right: list[str], *,
         i, j, kind = rows[r]
         klass = {align.CHANGED: "chg", align.DELETED: "del", align.INSERTED: "ins",
                  align.IGNORED: "ign"}.get(kind, "")
+        if r in moved:
+            klass = "mov"
         cells = []
         for index, lines, side in ((i, left, "l"), (j, right, "r")):
             if index == align.NONE:
