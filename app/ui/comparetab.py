@@ -183,9 +183,12 @@ class SideHead(QWidget):
         self.again.setVisible(bool(again))
 
     def set_focused(self, focused: bool) -> None:
+        # "active", not "focus": QWidget already has a read-only `focus`
+        # property, so setting one by that name did nothing and the accent
+        # line under the focused side never showed (fixed 1.14).
         value = "true" if focused else "false"
-        if self.property("focus") != value:
-            self.setProperty("focus", value)
+        if self.property("active") != value:
+            self.setProperty("active", value)
             self.style().unpolish(self)
             self.style().polish(self)
 
@@ -1376,9 +1379,16 @@ class CompareTab(QWidget):
             self.folders.setting.connect(self.setting)
             self.folders.command.connect(self._command)
             self.folders.split.connect(self._folder_split)
+            self.folders.sideChanged.connect(self._folder_side)
+            self._folder_side(self.folders.side)
             self.stack.addWidget(self.folders)
             folder.start()
         return self.folders
+
+    def _folder_side(self, side: int) -> None:
+        """1.14: the header over the half F5 copies from is the focused one."""
+        self.heads[0].set_focused(side == 0)
+        self.heads[1].set_focused(side == 1)
 
     def _folder_split(self, left: int, middle: int) -> None:
         """1.12: each side's header over its own half of the folder tree.
@@ -1485,8 +1495,9 @@ class CompareTab(QWidget):
         mode = self.session.options.intraline
         self._char.setChecked(mode == "char")
         self._word.setChecked(mode == "word")
-        self.heads[0].set_focused(self.view.focused_side == 0)
-        self.heads[1].set_focused(self.view.focused_side == 1)
+        focused = self.folders.side if self.folders is not None else self.view.focused_side
+        self.heads[0].set_focused(focused == 0)
+        self.heads[1].set_focused(focused == 1)
 
     def _update_position(self) -> None:
         s = self.session
@@ -1555,8 +1566,9 @@ class CompareTab(QWidget):
         self.count.setProperty("state", state)
         self.count.style().unpolish(self.count)
         self.count.style().polish(self.count)
-        self.heads[0].set_focused(self.view.focused_side == 0)
-        self.heads[1].set_focused(self.view.focused_side == 1)
+        focused = self.folders.side if self.folders is not None else self.view.focused_side
+        self.heads[0].set_focused(focused == 0)
+        self.heads[1].set_focused(focused == 1)
         if result is not None:
             self.status.emit(self._status_line(result))
 

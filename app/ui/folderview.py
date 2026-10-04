@@ -423,6 +423,20 @@ class FolderTree(QTreeView):
     tab's keys (swap, reload) go up as commands like the text view's."""
 
     command = Signal(str)
+    #: 1.14: the half last clicked, 0 left or 1 right -- the side F5 copies from.
+    sideClicked = Signal(int)
+
+    def focusNextPrevChild(self, next: bool) -> bool:  # noqa: N802, A002
+        """Tab is "the other side" here, as in the text view and File Manager,
+        so it reaches keyPressEvent instead of moving the focus away."""
+        return False
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        column = self.header().logicalIndexAt(int(event.position().x()))
+        side = FolderModel.side_of(column)
+        if side >= 0:
+            self.sideClicked.emit(side)
+        super().mousePressEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         """The verdict column's surface runs the full height, rows or not, so
@@ -460,6 +474,14 @@ class FolderTree(QTreeView):
         mods = event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier)
         if key in (Qt.Key_Return, Qt.Key_Enter) and mods == Qt.NoModifier:
             self.command.emit("open")
+        elif key == Qt.Key_F5 and mods == Qt.NoModifier:
+            self.command.emit("copy-from-side")
+        elif mods == Qt.AltModifier and key == Qt.Key_Right:
+            self.command.emit("copy-right")
+        elif mods == Qt.AltModifier and key == Qt.Key_Left:
+            self.command.emit("copy-left")
+        elif key == Qt.Key_Tab and mods == Qt.NoModifier:
+            self.command.emit("other-side")
         elif mods == Qt.AltModifier and key == Qt.Key_Down:
             self.command.emit("next")
         elif mods == Qt.AltModifier and key == Qt.Key_Up:
@@ -492,6 +514,8 @@ class FolderView(QWidget):
     #: 1.12: where the halves meet, (left half width, verdict width), so the
     #: tab can put each side's header over its own half.
     split = Signal(int, int)
+    #: 1.14: which half is the active one, for the tab to mark its header.
+    sideChanged = Signal(int)
 
     def __init__(self, session: FolderSession, tokens: dict[str, str], *,
                  mask: str = "", parent: QWidget | None = None) -> None:
@@ -516,6 +540,11 @@ class FolderView(QWidget):
         session.extracted.connect(self.openExtracted)
         self.tree.doubleClicked.connect(lambda _i: self._open())
         self.tree.command.connect(self._command)
+        self.tree.sideClicked.connect(self.set_side)
+        self.tree.selectionModel().selectionChanged.connect(lambda *_a: self._update_copies())
+        #: 1.14: the side F5 copies from, as in File Manager: the half last
+        #: clicked, or switched to with Tab.
+        self.side = 0
         header = self.tree.header()
         header.setStretchLastSection(False)
         header.setSectionsMovable(False)
@@ -616,6 +645,25 @@ class FolderView(QWidget):
         sync_menu.aboutToShow.connect(
             lambda: self._stop_waiting.setEnabled(self.session.syncing))
         self.sync.setMenu(sync_menu)
+        # 1.14: the selected rows to one side, through the same preview and
+        # File Manager handoff as the right-click menu's copies.
+        self.to_left = QToolButton()
+        self.to_left.setText("Copy to left")
+        self.to_left.setProperty("role", "retry")
+        self.to_left.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.to_left.setFocusPolicy(Qt.NoFocus)
+        self.to_left.setToolTip("Copy the selected rows to the left folder (Alt+Left; "
+                                "F5 copies from the side you are on)")
+        self.to_left.clicked.connect(lambda _c=False: self.copy_selected(S.TO_LEFT))
+        self.to_right = QToolButton()
+        self.to_right.setText("Copy to right")
+        self.to_right.setProperty("role", "retry")
+        self.to_right.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.to_right.setLayoutDirection(Qt.RightToLeft)
+        self.to_right.setFocusPolicy(Qt.NoFocus)
+        self.to_right.setToolTip("Copy the selected rows to the right folder (Alt+Right; "
+                                 "F5 copies from the side you are on)")
+        self.to_right.clicked.connect(lambda _c=False: self.copy_selected(S.TO_RIGHT))
         self.expand = QToolButton()
         self.expand.setText("Expand")
         self.expand.setProperty("role", "retry")
@@ -640,6 +688,9 @@ class FolderView(QWidget):
         bar.addWidget(self._mask_label)
         bar.addWidget(self.mask, 1)
         bar.addStretch(0)
+        bar.addWidget(self.to_left)
+        bar.addWidget(self.to_right)
+        bar.addSpacing(6)
         bar.addWidget(self.contents)
         bar.addWidget(self.sync)
         bar.addWidget(self.expand)
@@ -669,6 +720,10 @@ class FolderView(QWidget):
         # The tree is in the interface font, like File Manager's listing; the
         # sizes line up by being right-aligned, not by being monospaced.
         self.model.tokens = tokens
+        ratio = float(self.devicePixelRatioF() or 1.0)
+        for button, glyph in ((self.to_left, "copy_left"), (self.to_right, "copy_right")):
+            button.setIcon(glyphs.icon(glyph, colour=tokens.get("txt_1", ""),
+                                       muted=tokens.get("txt_2", ""), size=14, ratio=ratio))
         self._size_columns()
         self.tree.viewport().update()
 
@@ -716,6 +771,7 @@ class FolderView(QWidget):
         self.line.setText(text)
         self.contents.setEnabled(self.session.tree is not None)
         self.sync.setEnabled(self.session.tree is not None or self.session.syncing)
+        self._update_copies()
         if self.session.syncing:
             text += "  ·  waiting for File Manager's queue"
             self.line.setText(text)
@@ -797,6 +853,29 @@ class FolderView(QWidget):
         if nodes:
             self.open_sync(direction, mode, nodes)
 
+    def copy_selected(self, direction: str) -> None:
+        """The selected rows copied one way (1.14): the preview first, where
+        rows with nothing to copy say so, then File Manager's queue."""
+        if not self.selected():
+            self.status.emit("Select the files or folders to copy first")
+            return
+        if self.session.syncing:
+            self.status.emit("A sync is already with File Manager; this comparison is "
+                             "read again when it finishes.")
+            return
+        self._picked(direction, S.COPY)
+
+    def set_side(self, side: int) -> None:
+        if side in (0, 1) and side != self.side:
+            self.side = side
+            self.sideChanged.emit(side)
+
+    def _update_copies(self) -> None:
+        ready = (self.session.tree is not None and not self.session.syncing
+                 and bool(self.selected()))
+        self.to_left.setEnabled(ready)
+        self.to_right.setEnabled(ready)
+
     def _remote(self, sides) -> None:
         if self._dialog is not None:
             self._dialog.set_remote(tuple(sides))
@@ -874,6 +953,14 @@ class FolderView(QWidget):
                 self.tree.setExpanded(index, not self.tree.isExpanded(index))
             else:
                 self._open()
+        elif name == "copy-from-side":
+            self.copy_selected(S.TO_RIGHT if self.side == 0 else S.TO_LEFT)
+        elif name == "copy-right":
+            self.copy_selected(S.TO_RIGHT)
+        elif name == "copy-left":
+            self.copy_selected(S.TO_LEFT)
+        elif name == "other-side":
+            self.set_side(1 - self.side)
         elif name == "next":
             self._step(1)
         elif name == "previous":

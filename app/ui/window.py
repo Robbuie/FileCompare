@@ -64,6 +64,8 @@ Ctrl+Alt+Right / Left     copy everything right, left
 Enter, F2, double-click   edit the selected lines (Ctrl+Enter keeps, Esc drops)
 Shift+Enter               insert an empty line below
 Right-click               copy, edit and align from a menu
+F5 (folders)              copy the selected rows from the side you're on
+Alt+Right / Left (folders) copy the selected rows right, left
 Delete                    delete the selected lines
 Ctrl+Z / Ctrl+Y           undo, redo on this side
 Ctrl+S / Ctrl+Shift+S     save this side, save both

@@ -493,7 +493,10 @@ Home / End             first, last difference (from the overview map)
 Tab                    the other side                    (File Manager's Tab)
 Ctrl+U                 swap sides                        (File Manager's swap panes)
 Ctrl+R                 compare again from disk           (File Manager's refresh)
-F5                     copy to the other side, folder mode  (File Manager's copy)
+F5                     copy the selected rows from the side last clicked (or
+                       Tabbed to) to the other, folder mode  (File Manager's
+                       copy; built 1.14). Alt+Right / Alt+Left copy them one
+                       way whatever the side. All go through the sync preview.
 Enter                  open the pair under the cursor, folder mode
 Ctrl+S / Ctrl+Shift+S  save the focused side, save all
 Ctrl+Z / Ctrl+Y        undo, redo on the focused side

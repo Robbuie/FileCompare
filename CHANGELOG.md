@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.14.0 - copy across in folder compare
+
+- **F5 copies the selected files and folders to the other side**, as in
+  File Manager. It copies from the side you last clicked in; Tab switches
+  sides. That side's header has a blue line under it so you can see which
+  one it is.
+- **Alt+Right and Alt+Left copy the selection right or left**, whichever
+  side you're on, the same keys as in the text view.
+- **"Copy to left" and "Copy to right" buttons** sit in the folder bar,
+  enabled once something is selected.
+- All of these open the same preview as the Sync menu, listing what will
+  be copied, before File Manager's queue does the copying. Files that are
+  already the same, or aren't on the side being copied from, are left out;
+  if that's everything, the preview says there's nothing to copy.
+- Fixed: the blue line under the focused side's header never appeared, in
+  text compare either. It shows now.
+
 ## 1.13.0 - copy just the lines you pick
 
 - **Select lines and copy just those across**, as in Beyond Compare. Drag

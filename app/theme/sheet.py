@@ -271,7 +271,7 @@ QWidget[role="sidehead"] {{
     background: {bg_1};
     border-bottom: 1px solid {line_soft};
 }}
-QWidget[role="sidehead"][focus="true"] {{ border-bottom: 1px solid {accent_line}; }}
+QWidget[role="sidehead"][active="true"] {{ border-bottom: 1px solid {accent_line}; }}
 QLabel[role="sidename"] {{ font-weight: 600; color: {txt_0}; }}
 QLabel[role="sidewhere"] {{ color: {txt_2}; }}
 QToolButton[role="sidefacts"] {{

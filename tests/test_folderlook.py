@@ -136,3 +136,46 @@ def test_each_side_has_its_own_names_and_only_its_side_is_washed(qt_app, tmp_pat
     tab.folders.tree.viewport().grab()        # every delegate paints without raising
     window._may_close = lambda pages: True
     window.close()
+
+
+def test_f5_and_the_buttons_copy_the_selection_from_the_side_you_are_on(qt_app, tmp_path):
+    from PySide6.QtCore import QItemSelectionModel
+
+    from app.core import syncplan as S
+
+    window, tab = _folder_tab(qt_app, tmp_path)
+    try:
+        view = tab.folders
+        calls = []
+        view.open_sync = lambda direction, mode, nodes=None: calls.append(
+            (direction, mode, [n.name for n in nodes or []]))
+        model = view.model
+        assert not view.to_right.isEnabled()          # nothing selected yet
+        view.copy_selected(S.TO_RIGHT)
+        assert calls == []
+
+        rows = {model.node(model.index(r, 0)).name: r for r in range(model.rowCount())}
+        view.tree.selectionModel().select(
+            model.index(rows["sub"], 0),
+            QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+        assert view.to_right.isEnabled() and view.to_left.isEnabled()
+
+        view._command("copy-from-side")               # F5 on the left half
+        assert calls[-1] == (S.TO_RIGHT, S.COPY, ["sub"])
+        assert tab.heads[0].property("active") == "true"
+
+        view.tree.sideClicked.emit(1)                 # a click in the right half
+        assert tab.heads[1].property("active") == "true"
+        assert tab.heads[0].property("active") == "false"
+        view._command("copy-from-side")
+        assert calls[-1][0] == S.TO_LEFT
+
+        view._command("other-side")                   # Tab
+        assert view.side == 0
+        view._command("copy-left")                    # Alt+Left, whatever the side
+        assert calls[-1][0] == S.TO_LEFT
+        view.to_right.click()
+        assert calls[-1][0] == S.TO_RIGHT
+    finally:
+        window._may_close = lambda pages: True
+        window.close()
