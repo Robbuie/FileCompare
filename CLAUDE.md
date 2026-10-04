@@ -269,6 +269,14 @@ by what was opened and can be switched from the tab's header.
   through Pygments and L5K and Structured Text through our own lexers; a
   language menu in the toolbar picks another or none.
 
+Copying across is by rows, not blocks: `Session.copy_rows(start, end,
+to_side)` replaces the target's lines in those rows with the source's, using
+`align.side_range` on each side, so part of a block, or a run across several
+blocks, copies exactly what was selected and one undo step takes it back
+(1.13). `copy_block` is `copy_rows` over the block. A single selected row is
+the cursor, not a selection, and copies its whole block -- one stray click
+must not shrink what Alt+Right copies.
+
 **Folder** -- recursive, both trees side by side.
 - Laid out as two mirrored halves (1.12): name, size, modified on the left;
   a verdict column drawn like the text gutter; name, size, modified on the
@@ -475,7 +483,11 @@ Ctrl+M                 the other end of a moved block (1.5)
 Ctrl+L, Ctrl+L         pin this line opposite one on the other side (1.6)
 Ctrl+Shift+L           remove the pin here, or all pins
 Ctrl+Alt+S             save this comparison's setup as a session (1.10)
-Alt+Right / Alt+Left   copy this block to the right, to the left
+Alt+Right / Alt+Left   copy to the right, to the left: the selected rows when
+                       two or more are selected and one differs (1.13), else
+                       the current block. The gutter draws the selection's
+                       own arrows, in the accent, at its first row.
+Shift+Enter            insert an empty line below the cursor (handled 1.13)
 Ctrl+Alt+Right / Left  copy all differences across
 Home / End             first, last difference (from the overview map)
 Tab                    the other side                    (File Manager's Tab)

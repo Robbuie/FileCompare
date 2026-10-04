@@ -297,3 +297,79 @@ def test_the_tab_copies_edits_finds_and_saves(qt_app, tmp_path):
     assert b.read_bytes() == b"[x]\r\nkey=3\r\nadded=1\r\nsame=yes\r\n"
     assert a.read_bytes() == b"[x]\r\nkey=1\r\nsame=yes\r\n"
     window.close()
+
+
+# --------------------------------------------------------- 1.13: copy rows
+
+def test_copy_part_of_a_difference(qt_app, tmp_path):
+    # One changed block of three lines; copy only its middle row.
+    s, a, b = session_for(tmp_path, b"top\na1\na2\na3\nend\n", b"top\nb1\nb2\nb3\nend\n")
+    rows = s.result.rows
+    middle = next(r for r, row in enumerate(rows) if row[0] == 2)
+    assert s.copy_rows(middle, middle + 1, 1)
+    assert s.sides[1].lines == ["top", "b1", "a2", "b3", "end"]
+    assert s.undo(1)
+    assert s.sides[1].lines == ["top", "b1", "b2", "b3", "end"]
+
+
+def test_copy_rows_across_two_differences_leaves_the_equal_lines(qt_app, tmp_path):
+    s, a, b = session_for(tmp_path, b"x1\nsame\nx2\nkeep\n", b"y1\nsame\ny2\nkeep\n")
+    assert s.copy_rows(0, 3, 0)
+    assert s.sides[0].lines == ["y1", "same", "y2", "keep"]
+    # One undo step for the whole selection.
+    assert s.undo(0)
+    assert s.sides[0].lines == ["x1", "same", "x2", "keep"]
+
+
+def test_a_filler_row_copied_across_removes_the_line_opposite(qt_app, tmp_path):
+    s, a, b = session_for(tmp_path, b"a\nextra\nb\n", b"a\nb\n")
+    rows = s.result.rows
+    gone = next(r for r, row in enumerate(rows) if row[1] == align.NONE)
+    assert s.copy_rows(gone, gone + 1, 0)
+    assert s.sides[0].lines == ["a", "b"]
+
+
+def test_the_tab_copies_a_selection_with_the_arrow_keys(qt_app, tmp_path):
+    from app import cli
+    from app.core import session as core
+    from app.core.config import Config
+    from app.ui.window import MainWindow
+
+    a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+    a.write_bytes(b"one\ntwo\nthree\nfour\n")
+    b.write_bytes(b"ONE\nTWO\nTHREE\nFOUR\n")
+    window = MainWindow(Config(path=str(tmp_path / "c.json")), look={}, look_source="own",
+                        custom_frame=False)
+    window.resize(1000, 600)
+    window.open_request(cli.parse([str(a), str(b)]))
+    window.show()
+    tab = window.pages.currentWidget()
+    try:
+        assert wait_for(lambda: tab.session.kind == core.TEXT)
+        wait_for(lambda: False, 0.05)
+        view = tab.view
+        # One row selected is a cursor, not a selection: the gutter offers the
+        # whole difference as before.
+        view.select_rows(0, 1, 2)
+        assert view.state.copyable() is None
+        # Two rows: those two and nothing else.
+        view.select_rows(0, 1, 3)
+        assert view.state.copyable() == (1, 3)
+        tab._command("copy-right")
+        assert wait_for(lambda: tab.session.current)
+        assert tab.session.sides[1].lines == ["ONE", "two", "three", "FOUR"]
+        # The gutter's arrow does the same through its own signal.
+        view.select_rows(1, 0, 2)
+        view.gutter.copyRowsRequested.emit(0, 2, 0)
+        assert tab.session.sides[0].lines == ["ONE", "two", "three", "four"]
+        # Equal rows only: nothing to copy, so no selection arrows.
+        view.select_rows(0, 1, 3)
+        assert view.state.copyable() is None
+        view.gutter.grab()
+        # Shift+Enter puts an empty line below the cursor's line.
+        view.select_rows(1, 0, 1)
+        tab._command("insert-line")
+        assert tab.session.sides[1].lines[:2] == ["ONE", ""]
+    finally:
+        window._may_close = lambda pages: True
+        window.close()

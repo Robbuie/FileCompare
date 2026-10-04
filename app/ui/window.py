@@ -59,9 +59,11 @@ Tab                       the other side
 Ctrl+M                    the other end of a moved block
 Ctrl+L, then Ctrl+L       hold this line opposite one on the other side
 Ctrl+Shift+L              remove the pin here, or every pin
-Alt+Right / Alt+Left      copy this difference right, left
+Alt+Right / Alt+Left      copy the selected lines, or this difference, right, left
 Ctrl+Alt+Right / Left     copy everything right, left
 Enter, F2, double-click   edit the selected lines (Ctrl+Enter keeps, Esc drops)
+Shift+Enter               insert an empty line below
+Right-click               copy, edit and align from a menu
 Delete                    delete the selected lines
 Ctrl+Z / Ctrl+Y           undo, redo on this side
 Ctrl+S / Ctrl+Shift+S     save this side, save both

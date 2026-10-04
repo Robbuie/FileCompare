@@ -94,6 +94,21 @@ class ViewState:
         lo, hi = sorted((self.anchor, self.cursor))
         return lo, hi + 1
 
+    def copyable(self) -> tuple[int, int] | None:
+        """The selected rows, when they are worth copying across on their own
+        (1.13): two or more rows, at least one of them not equal. A single
+        row is where the cursor is, not a choice, and copies its whole
+        difference as it always has."""
+        if not self.rows:
+            return None
+        lo, hi = self.selection()
+        hi = min(hi, len(self.rows))
+        if hi - lo < 2:
+            return None
+        if any(self.rows[r][2] != align.EQUAL for r in range(lo, hi)):
+            return lo, hi
+        return None
+
     def display(self, side: int, index: int) -> str:
         if index == align.NONE:
             return ""
@@ -149,6 +164,8 @@ class _Painted(QWidget):
     pressed = Signal(int, bool)
     dragged = Signal(int)
     doubleClicked = Signal(int)
+    #: 1.13: (row, global position) of a right-click.
+    menuAt = Signal(int, object)
 
     def __init__(self, state: ViewState, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -210,6 +227,11 @@ class _Painted(QWidget):
             row = self.row_at(event.position().y())
             self.pressed.emit(row, bool(event.modifiers() & Qt.ShiftModifier))
             self.clicked.emit(row)
+        elif event.button() == Qt.RightButton:
+            self.menuAt.emit(self.row_at(event.position().y()),
+                             event.globalPosition().toPoint())
+            event.accept()
+            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
@@ -435,6 +457,8 @@ class Gutter(_Painted):
     WIDTH = 30
     #: (block index, side to copy to)
     copyRequested = Signal(int, int)
+    #: 1.13: (first row, stop row, side to copy to), from the selection's arrows.
+    copyRowsRequested = Signal(int, int, int)
 
     def __init__(self, state: ViewState, parent: QWidget | None = None) -> None:
         super().__init__(state, parent)
@@ -442,8 +466,20 @@ class Gutter(_Painted):
         self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
 
+    def _selection_arrow_at(self, x: float, y: float) -> tuple[int, int, int] | None:
+        picked = self.state.copyable()
+        if picked is None or self.row_at(y) != picked[0]:
+            return None
+        to_side = 0 if x < self.width() / 2 else 1
+        if self.state.editable[to_side]:
+            return picked[0], picked[1], to_side
+        return None
+
     def _arrow_at(self, x: float, y: float) -> tuple[int, int] | None:
         row = self.row_at(y)
+        picked = self.state.copyable()
+        if picked is not None and row == picked[0]:
+            return None             # the selection's arrows are drawn there
         for index, block in enumerate(self.state.blocks):
             if block.start == row and block.significant:
                 to_side = 0 if x < self.width() / 2 else 1
@@ -453,7 +489,13 @@ class Gutter(_Painted):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
-            hit = self._arrow_at(event.position().x(), event.position().y())
+            x, y = event.position().x(), event.position().y()
+            picked = self._selection_arrow_at(x, y)
+            if picked is not None:
+                self.copyRowsRequested.emit(*picked)
+                event.accept()
+                return
+            hit = self._arrow_at(x, y)
             if hit is not None:
                 self.copyRequested.emit(*hit)
                 event.accept()
@@ -461,7 +503,14 @@ class Gutter(_Painted):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
-        hit = self._arrow_at(event.position().x(), event.position().y())
+        x, y = event.position().x(), event.position().y()
+        picked = self._selection_arrow_at(x, y)
+        if picked is not None:
+            count = picked[1] - picked[0]
+            self.setToolTip(f"Copy the {count} selected rows to the "
+                            + ("left (Alt+Left)" if picked[2] == 0 else "right (Alt+Right)"))
+            return
+        hit = self._arrow_at(x, y)
         if hit is None:
             self.setToolTip("")
         else:
@@ -474,6 +523,7 @@ class Gutter(_Painted):
         painter.fillRect(self.rect(), self.colour("bg_1"))
         end = min(len(s.rows), s.first + self.visible_rows() + 1)
         mid = self.width() / 2
+        picked = s.copyable()
         for block_index, block in enumerate(s.blocks):
             if block.end <= s.first or block.start >= end:
                 continue
@@ -489,7 +539,25 @@ class Gutter(_Painted):
                 painter.drawLine(2, int(top), 2, int(bottom))
                 painter.drawLine(self.width() - 3, int(top), self.width() - 3, int(bottom))
             if block.significant and s.first <= block.start < end:
-                self._arrows(painter, top, current)
+                if picked is None or block.start != picked[0]:
+                    self._arrows(painter, top, current)
+        if picked is not None:
+            # The selection's own bracket and arrows, in the accent: these are
+            # the rows the arrows will copy, whichever differences they cut.
+            lo, hi = max(picked[0], s.first), min(picked[1], end)
+            if lo < hi:
+                top = (lo - s.first) * self.row_h
+                bottom = (hi - s.first) * self.row_h
+                wash = QColor(self.colour("accent"))
+                wash.setAlphaF(0.16)
+                painter.fillRect(QRectF(1, top, self.width() - 2, bottom - top), wash)
+                painter.setPen(QPen(self.colour("accent"), 1.5))
+                painter.drawLine(QPointF(2, top + 1), QPointF(2, bottom - 1))
+                painter.drawLine(QPointF(self.width() - 3, top + 1),
+                                 QPointF(self.width() - 3, bottom - 1))
+            if s.first <= picked[0] < end:
+                self._arrows(painter, (picked[0] - s.first) * self.row_h, True,
+                             colour=self.colour("accent"))
         if s.pinned:
             # A pin is a bar straight across, in the accent: these two lines
             # are opposite each other because somebody said so.
@@ -504,9 +572,10 @@ class Gutter(_Painted):
         painter.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
         painter.end()
 
-    def _arrows(self, painter: QPainter, top: float, current: bool) -> None:
+    def _arrows(self, painter: QPainter, top: float, current: bool,
+                colour: QColor | None = None) -> None:
         y = top + self.row_h / 2
-        colour = self.colour("txt_0" if current else "txt_1")
+        colour = colour if colour is not None else self.colour("txt_0" if current else "txt_1")
         painter.setPen(Qt.NoPen)
         painter.setBrush(colour)
         half = min(5.0, self.row_h / 3)
@@ -676,6 +745,11 @@ class DiffView(QWidget):
     command = Signal(str)
     #: (block index, side to copy to), from the gutter's arrows.
     copyBlock = Signal(int, int)
+    #: 1.13: (first row, stop row, side to copy to), from the selection's arrows.
+    copyRows = Signal(int, int, int)
+    #: 1.13: a right-click on a pane, at this global position; the selection
+    #: has already been moved to the row clicked if it was outside it.
+    menuRequested = Signal(object)
     #: (side, first row, stop row, new text), from the line editor.
     edited = Signal(int, int, int, str)
 
@@ -715,6 +789,9 @@ class DiffView(QWidget):
             pane.dragged.connect(lambda row, sd=side: self._press(sd, row, True))
             pane.doubleClicked.connect(lambda row, sd=side: self._double(sd, row))
         self.gutter.copyRequested.connect(self.copyBlock)
+        self.gutter.copyRowsRequested.connect(self.copyRows)
+        for side, pane in enumerate((self.left, self.right)):
+            pane.menuAt.connect(lambda row, point, sd=side: self._menu(sd, row, point))
         self.map.moved.connect(self._centre_on)
         self.map.wheeled.connect(self.scroll_by)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -908,6 +985,19 @@ class DiffView(QWidget):
         if not extend:
             self.state.anchor = row
         self.update_all()
+
+    def _menu(self, side: int, row: int, point) -> None:
+        """Right-click: on a row outside the selection, select that row first,
+        as a list does; inside it, keep the selection to act on."""
+        if not self.state.rows:
+            return
+        row = max(0, min(row, len(self.state.rows) - 1))
+        lo, hi = self.state.selection()
+        if side != self.state.side or not lo <= row < hi:
+            self._press(side, row, False)
+            self._clicked(row)
+        self.setFocus(Qt.MouseFocusReason)
+        self.menuRequested.emit(point)
 
     def _double(self, side: int, row: int) -> None:
         self._press(side, row, False)

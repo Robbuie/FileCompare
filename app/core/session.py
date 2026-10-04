@@ -355,13 +355,30 @@ class Session(QObject):
         the wrong lines."""
         if not self.current or not (0 <= block < len(self.result.blocks)):
             return False
+        b = self.result.blocks[block]
+        return self.copy_rows(b.start, b.end, to_side)
+
+    def copy_rows(self, start: int, end: int, to_side: int) -> bool:
+        """Rows `start:end` copied across (1.13): the other side's lines in
+        those rows replace this side's lines in them, as one undo step.
+
+        Any run of rows, not only a whole difference -- Beyond Compare's
+        "select some lines, press the arrow". Part of a difference copies
+        just that part; a run across several copies them all and leaves the
+        equal lines between as they were, since they are the same anyway. A
+        filler row on the source side removes the target's line opposite it.
+        """
+        if not self.current or self.result is None:
+            return False
+        rows = self.result.rows
+        start, end = max(0, start), min(len(rows), end)
+        if end <= start:
+            return False
         target = self.sides[to_side]
         if not target.editable:
             return False
-        b = self.result.blocks[block]
-        rows = self.result.rows
-        src0, src1 = align.side_range(rows, b.start, b.end, 1 - to_side)
-        dst0, dst1 = align.side_range(rows, b.start, b.end, to_side)
+        src0, src1 = align.side_range(rows, start, end, 1 - to_side)
+        dst0, dst1 = align.side_range(rows, start, end, to_side)
         source = self.sides[1 - to_side].lines[src0:src1]
         if target.doc.replace(dst0, dst1, source):
             self._shift_pins(to_side, dst0, dst1 - dst0, len(source))

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.13.0 - copy just the lines you pick
+
+- **Select lines and copy just those across**, as in Beyond Compare. Drag
+  over two or more lines (or Shift with the arrow keys), and arrows appear
+  in the middle strip beside the selection, which is outlined in the accent
+  colour. Click an arrow, or press Alt+Right or Alt+Left, to copy those
+  lines over the other side's.
+- It can be part of a difference, such as two lines out of a ten-line
+  change, or a run across several differences. Lines that are already the
+  same are left alone. One Ctrl+Z puts it all back.
+- With one line or nothing selected, the arrows and Alt+Right / Alt+Left
+  copy the whole difference, as before.
+- **Right-click in the text** for a menu: copy the selection, the
+  difference, or just this line to either side; edit, delete or insert
+  lines; copy the text; select all; and align a line with the other side.
+- **Shift+Enter inserts an empty line** below the cursor. The key had been
+  listed since 1.0 but did nothing.
+
 ## 1.12.1 - the build, not the app
 
 - No change to File Compare itself. Two of the font checks added in 1.11.1

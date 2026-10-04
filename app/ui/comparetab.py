@@ -410,6 +410,8 @@ class CompareTab(QWidget):
         self.view.currentChanged.connect(self._update_position)
         self.view.command.connect(self._command)
         self.view.copyBlock.connect(self._copy_block)
+        self.view.copyRows.connect(self._copy_rows)
+        self.view.menuRequested.connect(self._text_menu)
         self.view.edited.connect(self._edited)
         self.find = FindBar()
         self.find.changed.connect(self._find_changed)
@@ -556,11 +558,12 @@ class CompareTab(QWidget):
         box.addSpacing(2)
         box.addWidget(self._view_button)
         box.addSpacing(8)
-        self._copy_left = self._nav("copy_left", "Copy this difference to the left (Alt+Left)",
-                                    lambda: self._command("copy-left"))
+        self._copy_left = self._nav("copy_left",
+                                    "Copy the selected lines, or this difference, to the left "
+                                    "(Alt+Left)", lambda: self._command("copy-left"))
         self._copy_right = self._nav("copy_right",
-                                     "Copy this difference to the right (Alt+Right)",
-                                     lambda: self._command("copy-right"))
+                                     "Copy the selected lines, or this difference, to the right "
+                                     "(Alt+Right)", lambda: self._command("copy-right"))
         self._undo = self._nav("undo", "Undo on this side (Ctrl+Z)", lambda: self._command("undo"))
         self._redo = self._nav("redo", "Redo on this side (Ctrl+Y)", lambda: self._command("redo"))
         self._save = self._nav("save", "Save this side (Ctrl+S); both with Ctrl+Shift+S",
@@ -637,8 +640,13 @@ class CompareTab(QWidget):
         elif name == "rules":
             s.set_rules(s.rules.toggled())
         elif name in ("copy-left", "copy-right"):
-            if self.view.state.current is not None:
-                self._copy_block(self.view.state.current, 0 if name == "copy-left" else 1)
+            to_side = 0 if name == "copy-left" else 1
+            picked = self.view.state.copyable()
+            if picked is not None:
+                # 1.13: two or more rows selected are what gets copied.
+                self._copy_rows(picked[0], picked[1], to_side)
+            elif self.view.state.current is not None:
+                self._copy_block(self.view.state.current, to_side)
         elif name in ("copy-all-left", "copy-all-right"):
             to_side = 0 if name == "copy-all-left" else 1
             if self._can_edit(to_side):
@@ -681,6 +689,13 @@ class CompareTab(QWidget):
         elif name == "edit":
             if self._can_edit(side) and self._current_or_say():
                 self.view.begin_edit()
+        elif name == "insert-line":
+            # Bound to Shift+Enter since 1.0 and never handled until 1.13: an
+            # empty line below the cursor's line on the focused side.
+            if self._can_edit(side) and self._current_or_say() and s.result.rows:
+                row = min(self.view.state.cursor, len(s.result.rows) - 1)
+                _first, stop = align.side_range(s.result.rows, row, row + 1, side)
+                s.replace_lines(side, stop, stop, [""])
         elif name == "delete-lines":
             if self._can_edit(side) and self._current_or_say():
                 lo, hi = self.view.state.selection()
@@ -783,6 +798,63 @@ class CompareTab(QWidget):
     def _copy_block(self, block: int, to_side: int) -> None:
         if self._can_edit(to_side) and self._current_or_say():
             self.session.copy_block(block, to_side)
+
+    def _copy_rows(self, first: int, stop: int, to_side: int) -> None:
+        if self._can_edit(to_side) and self._current_or_say():
+            if self.session.copy_rows(first, stop, to_side):
+                count = stop - first
+                self.status.emit(f"Copied {count} row{'s' if count != 1 else ''} to the "
+                                 + ("left" if to_side == 0 else "right"))
+
+    def _text_menu(self, point) -> None:
+        """Right-click in a text pane (1.13): the copies first, Beyond Compare's
+        order, then editing the lines, then the rest."""
+        s = self.session
+        state = self.view.state
+        if s.kind != core.TEXT or s.result is None:
+            return
+        menu = QMenu(self)
+        names = ("left", "right")
+        picked = state.copyable()
+        block = state.current if state.current is not None and \
+            state.current < len(state.blocks) else None
+        row = state.cursor
+        for to_side in (0, 1):
+            arrow = "Alt+Left" if to_side == 0 else "Alt+Right"
+            editable = s.sides[to_side].editable
+            if picked is not None:
+                count = picked[1] - picked[0]
+                action = menu.addAction(f"Copy {count} selected rows to the {names[to_side]}"
+                                        f"\t{arrow}",
+                                        lambda t=to_side, p=picked: self._copy_rows(p[0], p[1], t))
+                action.setEnabled(editable)
+                continue
+            if block is not None and state.blocks[block].start <= row < state.blocks[block].end:
+                action = menu.addAction(f"Copy this difference to the {names[to_side]}\t{arrow}",
+                                        lambda t=to_side, b=block: self._copy_block(b, t))
+                action.setEnabled(editable)
+                b = state.blocks[block]
+                if b.end - b.start > 1:
+                    action = menu.addAction(f"Copy just this line to the {names[to_side]}",
+                                            lambda t=to_side, r=row: self._copy_rows(r, r + 1, t))
+                    action.setEnabled(editable)
+        if not menu.isEmpty():
+            menu.addSeparator()
+        side = self.view.focused_side
+        editable = s.sides[side].editable
+        menu.addAction("Edit these lines\tF2", lambda: self._command("edit")).setEnabled(editable)
+        menu.addAction("Delete these lines\tDel",
+                       lambda: self._command("delete-lines")).setEnabled(editable)
+        menu.addAction("Insert a line below\tShift+Enter",
+                       lambda: self._command("insert-line")).setEnabled(editable)
+        menu.addSeparator()
+        menu.addAction("Copy text\tCtrl+C", lambda: self._command("copy-text"))
+        menu.addAction("Select all\tCtrl+A", lambda: self._command("select-all"))
+        menu.addSeparator()
+        menu.addAction("Align with a line on the other side\tCtrl+L",
+                       lambda: self._command("align"))
+        menu.aboutToHide.connect(menu.deleteLater)
+        menu.popup(point)
 
     def _edited(self, side: int, lo: int, hi: int, text: str) -> None:
         s = self.session
@@ -1449,7 +1521,8 @@ class CompareTab(QWidget):
         for button in (self._first, self._prev, self._next, self._last):
             button.setEnabled(has)
         side = s.sides[self.view.focused_side]
-        on_block = has and self.view.state.current is not None
+        on_block = has and (self.view.state.current is not None
+                            or self.view.state.copyable() is not None)
         self._copy_left.setEnabled(on_block and s.sides[0].editable)
         self._copy_right.setEnabled(on_block and s.sides[1].editable)
         self._undo.setEnabled(side.doc is not None and side.doc.can_undo)
