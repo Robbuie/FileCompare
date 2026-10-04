@@ -157,11 +157,19 @@ class _Painted(QWidget):
         self.row_h = 20
         self.char_w = 8.0
         self.ascent = 14.0
+        # Kept apart from `self.font()` on purpose: the application stylesheet
+        # sets the UI family on every QWidget, and a stylesheet font beats
+        # `setFont`, so `self.font()` is Segoe UI however often it is set.
+        # Every column is placed by the width of "0" in this font, so painting
+        # in any other one puts colours and marks beside the text they belong
+        # to (1.11.1).
+        self.mono = mono_font({})
         self.setFocusPolicy(Qt.NoFocus)
         self.setAttribute(Qt.WA_OpaquePaintEvent, True)
 
     def apply_tokens(self, tokens: dict[str, str], font: QFont) -> None:
         self.tokens = tokens
+        self.mono = QFont(font)
         self.setFont(font)
         metrics = QFontMetricsF(font)
         self.row_h = int(metrics.height() + 5)
@@ -275,7 +283,7 @@ class TextPane(_Painted):
         selected_lo, selected_hi = s.selection() if s.side == side else (0, 0)
         found = self.colour("find_mark")
 
-        painter.setFont(self.font())
+        painter.setFont(self.mono)
         end = min(len(s.rows), s.first + self.visible_rows() + 1)
         for row in range(s.first, end):
             y = (row - s.first) * self.row_h

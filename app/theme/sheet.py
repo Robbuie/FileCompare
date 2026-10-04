@@ -328,11 +328,16 @@ QPlainTextEdit[role="passage"] {{
 
 /* Find: a strip over the card, only while it is open. */
 QWidget[role="findbar"] {{ background: transparent; }}
+
+/* Text the user reads by column: a stylesheet family beats `setFont`, so a
+   widget that wants the mono face has to be given it here (1.11.1). */
+QTableView[role="grid"] {{ font-family: {mono}; }}
 QLineEdit[role="findfield"] {{ font-family: {mono}; padding: 3px 8px; }}
 
 /* Editing lines in place: the same surface as the pane, outlined in the
    accent so it is plainly not part of the file until it is committed. */
 QPlainTextEdit[role="lineeditor"] {{
+    font-family: {mono};
     background: {bg_2};
     color: {txt_0};
     border: 1px solid {accent_line};
@@ -411,9 +416,14 @@ def apply(
     an unknown name falls back rather than raising -- so what was asked for
     and what was applied can differ.
     """
-    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtGui import QColor, QFont, QPalette
 
     values = tokens(theme, accent, density)
+    # Qt's stylesheet keeps only the first family of a `font-family` list, so
+    # `{mono}` is in effect "Cascadia Mono" alone, and a machine without it
+    # (Windows 10 before Terminal) got a proportional face in every mono
+    # field. A substitution makes the rest of the list real (1.11.1).
+    QFont.insertSubstitutions("Cascadia Mono", ["Consolas", "DejaVu Sans Mono", "Liberation Mono"])
     app.setStyleSheet(render(values))
 
     palette = QPalette()

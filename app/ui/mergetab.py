@@ -388,6 +388,7 @@ class MergeTab(QWidget):
         dialog = QDialog(self)
         dialog.setWindowTitle("Edit this part of the output")
         editor = QPlainTextEdit("\n".join(start))
+        editor.setProperty("role", "passage")
         editor.setFont(mono_font(self.tokens))
         editor.setLineWrapMode(QPlainTextEdit.NoWrap)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)

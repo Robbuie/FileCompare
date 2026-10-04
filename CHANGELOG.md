@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.11.1 - text lines up again
+
+- **The text panes now draw in the monospaced font they measure in.** The
+  window's style was quietly replacing it with the interface font. Because
+  every colour and character mark is placed by column, syntax colours ran
+  into each other ("PROGRAMConveyor"), indentation collapsed, and the boxes
+  marking changed characters sat beside the characters instead of on them.
+  This affected every text compare since 1.0.
+- The line editor (F2 on a selection), the Excel grid and the merge tab's
+  "Edit this part" box are monospaced too now.
+- On a PC without Cascadia Mono, mono text falls back to Consolas instead
+  of a proportional font.
+
 ## 1.11.0 - reports from the command line
 
 - **`FileCompare.exe A B --report out.html` compares without opening a

@@ -560,6 +560,16 @@ made in a worker, not in the argument parser.
 
 ## Things that will bite you
 
+- **A stylesheet font beats `setFont`.** The sheet sets the UI family on every
+  `QWidget`, so `widget.setFont(mono_font(...))` is silently undone and
+  `self.font()` is Segoe UI. The painted panes keep their own `self.mono` and
+  paint with that; a Qt widget that wants mono gets it from a `{mono}` rule in
+  `theme/sheet.py`. And Qt's stylesheet keeps only the *first* family of a
+  list, so `{mono}` means Cascadia Mono alone unless the substitution
+  `sheet.apply` installs is there. Until 1.11.1 every syntax colour and
+  character mark was drawn beside its text; `tests/test_fonts.py` is the
+  guard. Always look at a preview of text before calling it right.
+
 - **`difflib.SequenceMatcher` has `autojunk` on by default.** On any sequence
   of 200 or more items it treats an item appearing in more than 1% of
   positions as junk -- which in real files means blank lines, `}` and `end`
