@@ -9,7 +9,8 @@ no test did. These do.
 
 import os
 
-from PySide6.QtGui import QFontInfo, QPainter
+import pytest
+from PySide6.QtGui import QFont, QFontDatabase, QFontInfo, QFontMetricsF, QPainter
 
 from app import cli
 from app.core.config import Config
@@ -39,32 +40,66 @@ def _open(window, left, right):
     return tab
 
 
+def _measured_mono(font) -> bool:
+    """Whether every character is as wide as every other in this font, which
+    is the thing the column arithmetic depends on. Measured rather than asked:
+    `QFontInfo.fixedPitch` is not reported by every platform plugin -- the
+    offscreen one on the Windows runner says False for Consolas."""
+    metrics = QFontMetricsF(font)
+    return abs(metrics.horizontalAdvance("i") - metrics.horizontalAdvance("W")) < 0.01
+
+
+def _ui_family(widget) -> str:
+    return widget.font().families()[0] if widget.font().families() else widget.font().family()
+
+
 def test_the_panes_paint_in_the_face_they_measure(qt_app, tmp_path, monkeypatch):
     window = _window(tmp_path)
-    tab = _open(window, "moved.left.st", "moved.right.st")
-    pane = tab.view.left
+    try:
+        tab = _open(window, "moved.left.st", "moved.right.st")
+        pane = tab.view.left
 
-    # The stylesheet still owns the widget font; the pane must not use it.
-    assert not QFontInfo(pane.font()).fixedPitch()
-    assert QFontInfo(pane.mono).fixedPitch()
+        # The bug was the painter getting the widget's font, which the
+        # stylesheet owns. Whatever this machine resolves the families to,
+        # the painter must be handed the pane's own font and not that one.
+        used = []
+        original = QPainter.setFont
 
-    used = []
-    original = QPainter.setFont
+        def record(self, font):
+            used.append(font.families() or [font.family()])
+            return original(self, font)
 
-    def record(self, font):
-        used.append(QFontInfo(font).fixedPitch())
-        return original(self, font)
+        monkeypatch.setattr(QPainter, "setFont", record)
+        pane.grab()
+        assert used
+        assert all(families == pane.mono.families() for families in used)
+        assert pane.mono.families()[0] == "Cascadia Mono"
+        assert _ui_family(pane) != "Cascadia Mono"
+    finally:
+        window.close()
 
-    monkeypatch.setattr(QPainter, "setFont", record)
-    pane.grab()
-    assert used and all(used)
-    window.close()
 
-
-def test_the_line_editor_is_mono_too(qt_app, tmp_path):
+def test_the_mono_face_is_monospaced_where_one_exists(qt_app, tmp_path):
+    fixed = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+    if not _measured_mono(fixed):
+        pytest.skip("this platform plugin offers no monospaced face to resolve to")
     window = _window(tmp_path)
-    tab = _open(window, "settings.left.ini", "settings.right.ini")
-    editor = tab.view.editor
-    editor.ensurePolished()
-    assert QFontInfo(editor.font()).fixedPitch()
-    window.close()
+    try:
+        tab = _open(window, "settings.left.ini", "settings.right.ini")
+        assert _measured_mono(tab.view.left.mono), QFontInfo(tab.view.left.mono).family()
+    finally:
+        window.close()
+
+
+def test_the_line_editor_is_given_the_mono_family(qt_app, tmp_path):
+    window = _window(tmp_path)
+    try:
+        tab = _open(window, "settings.left.ini", "settings.right.ini")
+        editor = tab.view.editor
+        editor.ensurePolished()
+        # From the sheet's `{mono}` rule; the substitution `sheet.apply`
+        # installs is what turns it into Consolas where Cascadia is missing.
+        assert editor.font().family() == "Cascadia Mono"
+        assert "consolas" in [f.lower() for f in QFont.substitutes("Cascadia Mono")]
+    finally:
+        window.close()

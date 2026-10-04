@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.12.1 - the build, not the app
+
+- No change to File Compare itself. Two of the font checks added in 1.11.1
+  passed on a PC and failed on GitHub's build machine, which stopped the
+  1.11.1 and 1.12.0 installers from being made. They now check the same
+  thing in a way that holds on both. This is the installer to take for
+  everything in 1.11.1 and 1.12.0.
+
 ## 1.12.0 - folder compare as two panes
 
 - **Folder compare is laid out as two mirrored panes**, like Beyond Compare
