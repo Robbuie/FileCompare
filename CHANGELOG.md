@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.12.0 - folder compare as two panes
+
+- **Folder compare is laid out as two mirrored panes**, like Beyond Compare
+  and File Manager: name, size and modified for the left folder, a narrow
+  verdict column in the middle, then name, size and modified for the right
+  folder. Before, there was one name column, and files that existed only on
+  the right were listed on the left.
+- **A file on one side only leaves the other half of its row empty**, and
+  only the side that has it is coloured. Folders that exist on one side
+  only have their arrow on that side only.
+- The right side has its own indentation and arrows, and clicking a right
+  arrow opens or closes that folder the same as the left one.
+- **Rows show Windows' file icons**, the same ones File Manager shows. They
+  are looked up by file type, never by opening or touching a file, so a slow
+  share is no slower to show. Simple drawn icons stand in until they arrive.
+- Each side's folder name and path now sit over that side's own half.
+- The middle column looks like the text view's gutter and runs the full
+  height of the view.
+- The summary line no longer appears twice: it's in the status bar only.
+- The name filter has a "Filter" label and no longer stretches across the
+  whole bar.
+- The tree uses the interface font, like File Manager's listing. Sizes still
+  line up because they're right-aligned.
+
 ## 1.11.1 - text lines up again
 
 - **The text panes now draw in the monospaced font they measure in.** The

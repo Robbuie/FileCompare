@@ -1009,7 +1009,8 @@ class CompareTab(QWidget):
         self.hex.apply_tokens(tokens)
         self.images.apply_tokens(tokens)
         self.table.apply_tokens(tokens)
-        self._head_spacer.setFixedWidth(self.view.gutter.width())
+        if self.folders is None:
+            self._head_spacer.setFixedWidth(self.view.gutter.width())
 
     # -------------------------------------------------------------- drawing
 
@@ -1302,9 +1303,16 @@ class CompareTab(QWidget):
             self.folders.status.connect(self.status)
             self.folders.setting.connect(self.setting)
             self.folders.command.connect(self._command)
+            self.folders.split.connect(self._folder_split)
             self.stack.addWidget(self.folders)
             folder.start()
         return self.folders
+
+    def _folder_split(self, left: int, middle: int) -> None:
+        """1.12: each side's header over its own half of the folder tree.
+        A folder tab stays a folder tab, so nothing has to undo this."""
+        self.heads[0].setFixedWidth(max(0, left))
+        self._head_spacer.setFixedWidth(max(0, middle))
 
     def _launch_sibling(self) -> None:
         from app.io import launch

@@ -80,6 +80,15 @@ STROKES: dict[str, tuple] = {
     "copy_left":  (((20, 12), (5, 12)), ((10, 7), (5, 12), (10, 17)), ((20, 5), (20, 19))),
     "copy_right": (((4, 12), (19, 12)), ((14, 7), (19, 12), (14, 17)), ((4, 5), (4, 19))),
     "rules":    (((4, 7), (20, 7)), ((4, 12), (14, 12)), ((4, 17), (10, 17))),
+    # 1.12: the folder compare's stand-ins until Windows' own icons arrive,
+    # and what stays when they never do (off Windows, a kind with none).
+    "file":     (((6, 3), (14, 3), (19, 8), (19, 21), (6, 21), (6, 3)),
+                 ((14, 3), (14, 8), (19, 8))),
+    "zip":      (((6, 3), (14, 3), (19, 8), (19, 21), (6, 21), (6, 3)),
+                 ((14, 3), (14, 8), (19, 8)), ((11, 6), (11, 7)), ((11, 10), (11, 11)),
+                 ((11, 14), (11, 15))),
+    "chevron_right": (((9.5, 6.5), (15, 12), (9.5, 17.5)),),
+    "chevron_down":  (((6.5, 9.5), (12, 15), (17.5, 9.5)),),
 }
 
 #: Stroke width on the 24-unit grid. 1.9 rather than 2 because at a 16 pixel

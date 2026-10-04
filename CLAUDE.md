@@ -191,6 +191,8 @@ Holds what the UI renders.
   worker process can run it without importing Qt.
 - `io/pool.py` / `io/volume.py` -- worker processes per network volume, and
   which volume a path is on (1.4).
+- `io/shellicons.py` -- Windows' icon for a kind of file, by extension and
+  never by path, through ctypes (1.12). Touches no file; None off Windows.
 
 ### The row model
 
@@ -268,6 +270,21 @@ by what was opened and can be switched from the tab's header.
   language menu in the toolbar picks another or none.
 
 **Folder** -- recursive, both trees side by side.
+- Laid out as two mirrored halves (1.12): name, size, modified on the left;
+  a verdict column drawn like the text gutter; name, size, modified on the
+  right. Still one `QTreeView` and one model, so the halves cannot drift;
+  `RightNames` in `ui/folderview.py` draws the right name's indent, chevron
+  and icon from the same depth. A file on one side only leaves the other half
+  blank and unwashed. Sizes and times are fixed widths from the font, the
+  names share what is left, so the halves are always equal and the tab puts
+  each side's header over its own half (`FolderView.split`).
+- Row icons are Windows' own, by kind (`io/shellicons.py`, ctypes, the
+  SHGFI_USEFILEATTRIBUTES rule from File Manager's CLAUDE.md), fetched on one
+  icon thread and cached per kind (`ui/fileicons.py`). Drawn glyphs stand in
+  until they land and stay off Windows. Never ask for an icon by path.
+- The tree is in the interface font, like File Manager's listing. Once the
+  sheet styles `::item`, Qt stops drawing BackgroundRole, so the wash is
+  painted by the delegates (`_wash_cell`).
 - Compare by size and time (instant), then by content (queued, cancellable,
   per file). Size-and-time uses File Manager's two-second tolerance and
   case-insensitive names for the same reasons stated in its `core/compare.py`.

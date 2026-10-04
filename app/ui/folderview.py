@@ -1,15 +1,25 @@
-"""The folder compare view: both trees as one, every row given its verdict.
+"""The folder compare view: two mirrored trees in one, every row given its verdict.
 
-One tree rather than two side by side. The names match on both sides by
-definition -- that is what pairs them -- so a second name column would say the
-same thing twice; what differs is size and time, and those sit either side of
-a narrow verdict column, left then right, the way the text view puts the left
-file on the left. A file that is only on one side has the other side's cells
-empty, which reads as a gap the way a filler row does in the text view.
+Laid out the way Beyond Compare and File Manager's two panes are (1.12): the
+left folder on the left with its own name, size and time, the right folder on
+the right with the same three, and a narrow verdict column between them that
+is drawn like the text view's gutter. A file only on one side leaves the other
+side's half of the row blank, which reads as a gap the way a filler row does
+in the text view, and the colour wash covers only the side that has the file.
+
+It is still one `QTreeView` with one model. Two views would need their scroll
+positions, expansion and selection kept in step by hand, and every one of
+those is a way for the halves to drift; one view cannot drift. The tree draws
+the left name's indentation and arrows itself; `RightNames` draws the right
+name's, from the same depth, and an arrow click on the right toggles the same
+row.
 
 The difference colours are the text view's and mean the same things: red for
 only on the left, green for only on the right, amber for on both and not the
 same. A newer file's time is bold on the side that is newer.
+
+Icons are Windows' own, by kind, through `ui/fileicons.py` -- never by path,
+so a dead share costs nothing to draw.
 
 Enter or a double-click on a file opens that pair in a tab of its own, in
 whatever mode suits it. Nothing here reads a file: the walk, the verdicts and
@@ -20,8 +30,8 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from PySide6.QtCore import QAbstractItemModel, QModelIndex, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QFont
+from PySide6.QtCore import QAbstractItemModel, QEvent, QModelIndex, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QFont, QFontMetrics, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -31,6 +41,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
+    QStyle,
+    QStyledItemDelegate,
     QToolButton,
     QTreeView,
     QVBoxLayout,
@@ -40,26 +52,33 @@ from PySide6.QtWidgets import (
 from app.core import folders as F
 from app.core import syncplan as S
 from app.core.folderdiff import FolderSession
-from app.ui.diffview import mono_font, parse_colour
+from app.ui import fileicons, glyphs
+from app.ui.diffview import parse_colour
 
-COLUMNS = ("Name", "Size", "Modified", "", "Modified", "Size")
-NAME, LSIZE, LTIME, VERDICT, RTIME, RSIZE = range(6)
+#: Left half, verdict, right half -- the same three columns on each side, in
+#: the same order, as in File Manager's two panes (1.12).
+COLUMNS = ("Name", "Size", "Modified", "", "Name", "Size", "Modified")
+LNAME, LSIZE, LTIME, VERDICT, RNAME, RSIZE, RTIME = range(7)
+#: Before 1.12 there was one name column; code that only wants "the row"
+#: still asks for column 0.
+NAME = LNAME
+LEFT_COLUMNS = (LNAME, LSIZE, LTIME)
+RIGHT_COLUMNS = (RNAME, RSIZE, RTIME)
 
-#: What the narrow middle column shows for each verdict. Words, not symbols:
-#: colour carries it at a glance and the letters carry it for anyone who does
-#: not see the colour.
+#: What the narrow middle column shows for each verdict. Colour carries it at
+#: a glance and the mark carries it for anyone who does not see the colour.
 MARKS = {
     F.SAME: "=",
     F.CONTENT_SAME: "=",
     F.HOUR_APART: "=",
     F.NEWER_LEFT: "<",
     F.NEWER_RIGHT: ">",
-    F.DIFFERENT: "!=",
-    F.CONTENT_DIFF: "!=",
-    F.ONLY_LEFT: "<-",
-    F.ONLY_RIGHT: "->",
+    F.DIFFERENT: "\u2260",
+    F.CONTENT_DIFF: "\u2260",
+    F.ONLY_LEFT: "\u2190",
+    F.ONLY_RIGHT: "\u2192",
     F.CLASH: "?",
-    F.ERROR: "x",
+    F.ERROR: "\u00d7",
 }
 
 SHOW_LABELS = (
@@ -91,11 +110,12 @@ def _time(entry: F.Entry | None) -> str:
 class FolderModel(QAbstractItemModel):
     """The merged tree, filtered by the show setting, as Qt wants it."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, icons: fileicons.FileIcons | None = None) -> None:
         super().__init__(parent)
         self.root: F.Node | None = None
         self.show = F.SHOW_ALL
         self.tokens: dict[str, str] = {}
+        self.icons = icons if icons is not None else fileicons.shared()
         self._kids: dict[int, list[F.Node]] = {}
         self._bold = QFont()
         self._bold.setBold(True)
@@ -123,6 +143,19 @@ class FolderModel(QAbstractItemModel):
         if not index.isValid():
             return self.root
         return index.internalPointer()
+
+    def depth(self, node: F.Node) -> int:
+        """How many folders above this row, for the right name's indent."""
+        depth = 0
+        up = node.parent
+        while up is not None and up is not self.root:
+            depth += 1
+            up = up.parent
+        return depth
+
+    def icon(self, node: F.Node) -> QIcon:
+        return self.icons.icon(node.name, node.is_dir, self.tokens.get("txt_1", ""),
+                               self.tokens.get("txt_2", ""))
 
     # ---------------------------------------------------------- Qt's model
 
@@ -156,6 +189,8 @@ class FolderModel(QAbstractItemModel):
         return len(COLUMNS)
 
     def hasChildren(self, parent=QModelIndex()):  # noqa: N802, B008
+        if parent.isValid() and parent.column() != 0:
+            return False
         node = self.node(parent)
         return node is not None and bool(node.children) and bool(self.kids(node))
 
@@ -167,28 +202,32 @@ class FolderModel(QAbstractItemModel):
                 else int(Qt.AlignLeft | Qt.AlignVCenter)
         return None
 
+    @staticmethod
+    def side_of(column: int) -> int:
+        return 0 if column in LEFT_COLUMNS else 1 if column in RIGHT_COLUMNS else -1
+
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
             return None
         node: F.Node = index.internalPointer()
         column = index.column()
+        side = self.side_of(column)
+        entry = node.left if side == 0 else node.right if side == 1 else None
         if role == Qt.DisplayRole:
-            if column == NAME:
-                if node.is_dir and node.files:
-                    return node.name
-                return node.name
-            if column == LSIZE:
-                return _size(node.left)
-            if column == LTIME:
-                return _time(node.left)
-            if column == RSIZE:
-                return _size(node.right)
-            if column == RTIME:
-                return _time(node.right)
+            if column in (LNAME, RNAME):
+                return node.name if entry is not None else ""
+            if column in (LSIZE, RSIZE):
+                return _size(entry)
+            if column in (LTIME, RTIME):
+                return _time(entry)
             if column == VERDICT:
                 if node.is_dir and node.status == F.DIFFERENT:
                     return f"{node.differing:,}"
                 return MARKS.get(node.status, "")
+            return None
+        if role == Qt.DecorationRole:
+            if column == LNAME and entry is not None:
+                return self.icon(node)
             return None
         if role == Qt.ToolTipRole:
             if node.is_dir and node.status == F.DIFFERENT:
@@ -201,13 +240,19 @@ class FolderModel(QAbstractItemModel):
                 return int(Qt.AlignRight | Qt.AlignVCenter)
             if column == VERDICT:
                 return int(Qt.AlignCenter)
-            return None
+            return int(Qt.AlignLeft | Qt.AlignVCenter)
         if role == Qt.ForegroundRole:
-            name = _ink(node.status)
-            if column in (LSIZE, LTIME) and node.left is None:
+            if side >= 0 and entry is None:
                 return None
+            name = _ink(node.status)
             return QBrush(parse_colour(self.tokens.get(name))) if name else None
         if role == Qt.BackgroundRole:
+            if side < 0:
+                return None
+            # Only the side that has the file is washed: the other half is a
+            # gap, the way a filler row is in the text view.
+            if node.status in (F.ONLY_LEFT, F.ONLY_RIGHT) and entry is None:
+                return None
             name = _wash(node.status)
             return QBrush(parse_colour(self.tokens.get(name))) if name else None
         if role == Qt.FontRole:
@@ -246,11 +291,169 @@ def _wash(status: str) -> str:
     }.get(status, "")
 
 
+def _wash_cell(painter, option, index) -> None:
+    """The row wash, drawn by hand: once the stylesheet styles `::item`, Qt's
+    style stops drawing BackgroundRole, and the wash is what makes a file that
+    is only on one side read as a filled half beside an empty one."""
+    if option.state & QStyle.State_Selected:
+        return
+    brush = index.data(Qt.BackgroundRole)
+    if brush is not None:
+        painter.fillRect(option.rect, brush)
+
+
+def _wash_cell_rect(painter, rect, brush) -> None:
+    if brush is not None:
+        painter.fillRect(rect, brush)
+
+
+class Washed(QStyledItemDelegate):
+    """Every ordinary cell: the wash, then whatever Qt draws."""
+
+    def paint(self, painter, option, index) -> None:
+        _wash_cell(painter, option, index)
+        super().paint(painter, option, index)
+
+
+class RightNames(QStyledItemDelegate):
+    """The right folder's name column, drawn as if it were the tree column.
+
+    Same indent per level as the tree's own, a chevron on folders that turns
+    with the left one, and the icon -- so the right half is a mirror of the
+    left rather than a list of names in a table. A click on the chevron
+    toggles the row, the same row the left arrow toggles.
+    """
+
+    ICON = fileicons.ROW_ICON
+    CHEVRON = 12
+
+    def __init__(self, tree: QTreeView, model: FolderModel) -> None:
+        super().__init__(tree)
+        self.tree = tree
+        self.model = model
+
+    def _parts(self, rect: QRect, node: F.Node) -> tuple[QRect, QRect, QRect]:
+        indent = self.tree.indentation()
+        x = rect.x() + self.model.depth(node) * indent + 4
+        mid = rect.y() + rect.height() // 2
+        chevron = QRect(x + (indent - self.CHEVRON) // 2 - 4, mid - self.CHEVRON // 2,
+                        self.CHEVRON, self.CHEVRON)
+        x += indent - 4
+        icon = QRect(x, mid - self.ICON // 2, self.ICON, self.ICON)
+        text = QRect(x + self.ICON + 6, rect.y(), max(0, rect.right() - x - self.ICON - 8),
+                     rect.height())
+        return chevron, icon, text
+
+    def paint(self, painter, option, index) -> None:
+        opt = option.__class__(option)
+        self.initStyleOption(opt, index)
+        node: F.Node = index.internalPointer()
+        text = opt.text
+        opt.text = ""
+        opt.icon = QIcon()
+        widget = opt.widget
+        style = widget.style() if widget is not None else QApplication.style()
+        _wash_cell(painter, opt, index)
+        style.drawPrimitive(QStyle.PE_PanelItemViewItem, opt, painter, widget)
+        if node is None or node.right is None:
+            return
+        tokens = self.model.tokens
+        chevron, icon_rect, text_rect = self._parts(opt.rect, node)
+        painter.save()
+        if node.is_dir and self.model.kids(node):
+            first = self.model.index(index.row(), LNAME, index.parent())
+            glyph = "chevron_down" if self.tree.isExpanded(first) else "chevron_right"
+            ratio = float(painter.device().devicePixelRatioF() or 1.0)
+            glyphs.icon(glyph, colour=tokens.get("txt_2", ""), muted=tokens.get("txt_2", ""),
+                        size=self.CHEVRON, ratio=ratio).paint(painter, chevron)
+        self.model.icon(node).paint(painter, icon_rect)
+        selected = bool(opt.state & QStyle.State_Selected)
+        brush = index.data(Qt.ForegroundRole)
+        colour = parse_colour(tokens.get("txt_0")) if selected or brush is None \
+            else brush.color()
+        painter.setPen(QPen(colour))
+        painter.setFont(opt.font)
+        elided = QFontMetrics(opt.font).elidedText(text, Qt.ElideMiddle, text_rect.width())
+        painter.drawText(text_rect, int(Qt.AlignLeft | Qt.AlignVCenter), elided)
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index) -> bool:  # noqa: N802
+        if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            node: F.Node = index.internalPointer()
+            if node is not None and node.right is not None and node.is_dir:
+                chevron, _icon, _text = self._parts(option.rect, node)
+                if chevron.adjusted(-4, -4, 4, 4).contains(event.position().toPoint()):
+                    first = self.model.index(index.row(), LNAME, index.parent())
+                    self.tree.setExpanded(first, not self.tree.isExpanded(first))
+                    return True
+        return super().editorEvent(event, model, option, index)
+
+
+class Verdicts(QStyledItemDelegate):
+    """The middle column, drawn as the text view's gutter: its own surface,
+    a hairline either side, the mark centred in the difference colour."""
+
+    def __init__(self, tree: QTreeView, model: FolderModel) -> None:
+        super().__init__(tree)
+        self.model = model
+
+    def paint(self, painter, option, index) -> None:
+        tokens = self.model.tokens
+        rect = option.rect
+        painter.save()
+        selected = bool(option.state & QStyle.State_Selected)
+        painter.fillRect(rect, parse_colour(tokens.get("accent_row" if selected else "bg_1")))
+        painter.setPen(QPen(parse_colour(tokens.get("line_soft"))))
+        painter.drawLine(rect.topLeft(), rect.bottomLeft())
+        painter.drawLine(rect.topRight(), rect.bottomRight())
+        text = index.data(Qt.DisplayRole) or ""
+        if text:
+            brush = index.data(Qt.ForegroundRole)
+            colour = brush.color() if brush is not None else parse_colour(tokens.get("txt_2"))
+            painter.setPen(QPen(colour))
+            font = QFont(option.font)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(rect, int(Qt.AlignCenter), text)
+        painter.restore()
+
+
 class FolderTree(QTreeView):
     """Keys: Enter opens, Alt+Up/Down steps through differences, and the
     tab's keys (swap, reload) go up as commands like the text view's."""
 
     command = Signal(str)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        """The verdict column's surface runs the full height, rows or not, so
+        the two halves stay visibly two halves below the last row too."""
+        model = self.model()
+        tokens = getattr(model, "tokens", None)
+        if tokens:
+            header = self.header()
+            x = header.sectionViewportPosition(VERDICT)
+            w = header.sectionSize(VERDICT)
+            painter = QPainter(self.viewport())
+            painter.fillRect(QRect(x, 0, w, self.viewport().height()),
+                             parse_colour(tokens.get("bg_1")))
+            painter.setPen(QPen(parse_colour(tokens.get("line_soft"))))
+            painter.drawLine(x, 0, x, self.viewport().height())
+            painter.drawLine(x + w - 1, 0, x + w - 1, self.viewport().height())
+            painter.end()
+        super().paintEvent(event)
+
+    def drawBranches(self, painter, rect, index) -> None:  # noqa: N802
+        """No arrow on the left for a folder that is only on the right: the
+        left half of that row is a gap, and the right name draws its own."""
+        node = index.internalPointer() if index.isValid() else None
+        if node is not None and node.left is None:
+            model = self.model()
+            _wash_cell_rect(painter, rect, model.data(index, Qt.BackgroundRole))
+            return
+        model = self.model()
+        if node is not None and not self.selectionModel().isSelected(index):
+            _wash_cell_rect(painter, rect, model.data(index, Qt.BackgroundRole))
+        super().drawBranches(painter, rect, index)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         key = event.key()
@@ -286,15 +489,24 @@ class FolderView(QWidget):
     command = Signal(str)
     #: A folder setting to keep for next time: (config key, value).
     setting = Signal(str, object)
+    #: 1.12: where the halves meet, (left half width, verdict width), so the
+    #: tab can put each side's header over its own half.
+    split = Signal(int, int)
 
     def __init__(self, session: FolderSession, tokens: dict[str, str], *,
                  mask: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.session = session
         self.model = FolderModel(self)
+        self.model.icons.set_scale(float(self.devicePixelRatioF() or 1.0))
+        self.model.icons.changed.connect(self._icons_arrived)
         self.tree = FolderTree()
         self.tree.setModel(self.model)
         self.tree.setProperty("role", "foldertree")
+        self.tree.setItemDelegate(Washed(self.tree))
+        self.tree.setItemDelegateForColumn(RNAME, RightNames(self.tree, self.model))
+        self.tree.setItemDelegateForColumn(VERDICT, Verdicts(self.tree, self.model))
+        self.tree.setIconSize(QSize(fileicons.ROW_ICON, fileicons.ROW_ICON))
         self.tree.setUniformRowHeights(True)
         self.tree.setAlternatingRowColors(False)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -306,10 +518,16 @@ class FolderView(QWidget):
         self.tree.command.connect(self._command)
         header = self.tree.header()
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(NAME, QHeaderView.Stretch)
-        for column in (LSIZE, LTIME, VERDICT, RTIME, RSIZE):
-            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
-        header.setMinimumSectionSize(36)
+        header.setSectionsMovable(False)
+        header.setMinimumSectionSize(28)
+        # Both names stretch and everything else is a fixed width worked out
+        # from the font, the same on both sides, so the halves are always the
+        # same width and the verdict column sits in the middle (1.12).
+        for column in (LNAME, RNAME):
+            header.setSectionResizeMode(column, QHeaderView.Stretch)
+        for column in (LSIZE, LTIME, VERDICT, RSIZE, RTIME):
+            header.setSectionResizeMode(column, QHeaderView.Fixed)
+        header.sectionResized.connect(lambda *_a: self._emit_split())
 
         self.shows: dict[str, QPushButton] = {}
         segments = QWidget()
@@ -328,7 +546,10 @@ class FolderView(QWidget):
             self.shows[value] = button
         self.mask = QLineEdit(mask)
         self.mask.setProperty("role", "findfield")
-        self.mask.setPlaceholderText("Names: *.L5X;*.ini  -.git;-*.bak")
+        self.mask.setMaximumWidth(460)
+        self.mask.setPlaceholderText("*.L5X;*.ini  -.git;-*.bak")
+        self._mask_label = QLabel("Filter")
+        self._mask_label.setProperty("role", "hint")
         self.mask.setToolTip("Which names take part. Patterns separated by ; -- a "
                              "leading - leaves a name out, files or folders.")
         self._mask_timer = QTimer(self)
@@ -405,14 +626,20 @@ class FolderView(QWidget):
         self.collapse.setProperty("role", "retry")
         self.collapse.setFocusPolicy(Qt.NoFocus)
         self.collapse.clicked.connect(lambda _c=False: self.tree.collapseAll())
+        # The summary is the status bar's to show; before 1.12 it was here as
+        # well, word for word. The label stays for what reads it.
         self.line = QLabel()
         self.line.setProperty("role", "count")
+        self.line.hide()
 
         bar = QHBoxLayout()
         bar.setContentsMargins(8, 6, 8, 6)
         bar.setSpacing(6)
         bar.addWidget(segments)
+        bar.addSpacing(6)
+        bar.addWidget(self._mask_label)
         bar.addWidget(self.mask, 1)
+        bar.addStretch(0)
         bar.addWidget(self.contents)
         bar.addWidget(self.sync)
         bar.addWidget(self.expand)
@@ -425,7 +652,6 @@ class FolderView(QWidget):
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(0)
         box.addWidget(top)
-        box.addWidget(self.line)
         box.addWidget(self.tree, 1)
 
         session.changed.connect(self.refresh)
@@ -440,8 +666,37 @@ class FolderView(QWidget):
     # ----------------------------------------------------------- drawing
 
     def apply_tokens(self, tokens: dict[str, str]) -> None:
+        # The tree is in the interface font, like File Manager's listing; the
+        # sizes line up by being right-aligned, not by being monospaced.
         self.model.tokens = tokens
-        self.tree.setFont(mono_font(tokens))
+        self._size_columns()
+        self.tree.viewport().update()
+
+    def _size_columns(self) -> None:
+        # Bold, because a newer side's time is drawn bold and must still fit.
+        font = QFont(self.tree.font())
+        font.setBold(True)
+        self.model._bold = font
+        metrics = QFontMetrics(font)
+        size = metrics.horizontalAdvance("9,999.9 MB") + 22
+        time = metrics.horizontalAdvance("2026-12-31 23:59:59") + 26
+        header = self.tree.header()
+        for column, width in ((LSIZE, size), (RSIZE, size), (LTIME, time), (RTIME, time),
+                              (VERDICT, 34)):
+            header.resizeSection(column, width)
+        self._emit_split()
+
+    def _emit_split(self) -> None:
+        header = self.tree.header()
+        left = sum(header.sectionSize(c) for c in LEFT_COLUMNS)
+        self.split.emit(self.tree.x() + self.tree.viewport().x() + left,
+                        header.sectionSize(VERDICT))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._emit_split()
+
+    def _icons_arrived(self) -> None:
         self.tree.viewport().update()
 
     def refresh(self) -> None:
