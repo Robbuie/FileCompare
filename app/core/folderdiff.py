@@ -211,6 +211,34 @@ class FolderSession(QObject):
                                                        sides[0], sides[1])
         return True
 
+    def set_path(self, index: int, path: str) -> bool:
+        """Point one side at another folder (1.15), as Beyond Compare's path
+        box does. Only that side is walked again: the other side's listing is
+        kept, so changing the right of a comparison against a slow share does
+        not read the share again. False when it is the folder already."""
+        side = self.sides[index]
+        if folders.same_path(path, side.path) and side.state not in (FAILED, SLOW):
+            return False
+        side.path = path
+        side.title = ""
+        # No tree until both sides are read again: a sync planned from the
+        # old one would copy to and from the folders that are no longer shown.
+        self.tree = None
+        self.cancel_contents()
+        self._walk(index)
+        self._timer.start()
+        self.changed.emit()
+        return True
+
+    def set_paths(self, left: str, right: str) -> bool:
+        """Both sides at once (1.15): "Compare these folders" from a row. A
+        side that is already that folder is not read again."""
+        changed = False
+        for index, path in ((LEFT, left), (RIGHT, right)):
+            if path:
+                changed = self.set_path(index, path) or changed
+        return changed
+
     def swap(self) -> None:
         self.sides.reverse()
         # Above all here: the old tree's left is the new right, and a copy

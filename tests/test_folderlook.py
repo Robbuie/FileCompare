@@ -179,3 +179,121 @@ def test_f5_and_the_buttons_copy_the_selection_from_the_side_you_are_on(qt_app, 
     finally:
         window._may_close = lambda pages: True
         window.close()
+
+
+# ------------------------------------------------------------------ 1.15
+
+def test_folder_paths_are_tidied_and_climbed_as_strings():
+    assert F.tidy(' "C:/Jobs/1234/" ') == "C:\\Jobs\\1234"
+    assert F.tidy("D:") == "D:\\"
+    assert F.tidy("C:\\") == "C:\\"
+    assert F.tidy("\\\\srv\\share\\a\\") == "\\\\srv\\share\\a"
+    assert F.tidy("\\\\srv\\share") == "\\\\srv\\share\\"
+    assert F.ancestors("S:\\Jobs\\1234\\PLC") == ["S:\\Jobs\\1234", "S:\\Jobs", "S:\\"]
+    assert F.ancestors("\\\\srv\\share\\a\\b") == ["\\\\srv\\share\\a", "\\\\srv\\share\\"]
+    assert F.ancestors("C:\\") == []
+    assert F.ancestors("/tmp/a") == ["/tmp", "/"]
+    assert F.same_path("c:\\jobs\\", "C:\\Jobs")
+    assert F.rebased({"Sub", "Sub\\Deep", "Other"}, "sub") == {"deep"}
+
+
+def test_the_show_buttons_count_what_they_show():
+    left = [F.Entry("a.txt", False, 1, 10.0), F.Entry("b.txt", False, 1, 10.0),
+            F.Entry("c.txt", False, 1, 10.0)]
+    right = [F.Entry("a.txt", False, 1, 10.0), F.Entry("b.txt", False, 1, 99.0),
+             F.Entry("d.txt", False, 1, 10.0)]
+    totals = F.show_counts(F.build(left, right))
+    assert totals == {F.SHOW_ALL: 4, F.SHOW_DIFFERENT: 3, F.SHOW_LEFT: 1, F.SHOW_RIGHT: 2,
+                      F.SHOW_SAME: 1}
+
+
+def _wait(predicate, seconds=10):
+    end = time.monotonic() + seconds
+    while not predicate() and time.monotonic() < end:
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+    QCoreApplication.processEvents()
+    return predicate()
+
+
+def test_a_folder_compare_opens_collapsed_on_the_differences(qt_app, tmp_path):
+    from app.ui import folderview as V
+
+    window, tab = _folder_tab(qt_app, tmp_path)
+    try:
+        view = tab.folders
+        model = view.model
+        assert model.show == F.SHOW_DIFFERENT
+        names = [model.node(model.index(r, 0)).name for r in range(model.rowCount())]
+        assert "both.txt" not in names                 # the same file is filtered out
+        assert not any(view.tree.isExpanded(model.index(r, 0))
+                       for r in range(model.rowCount()))
+        assert view.shows[F.SHOW_DIFFERENT].text().endswith("2")
+        rows = {model.node(model.index(r, 0)).name: r for r in range(model.rowCount())}
+        assert model.data(model.index(rows["sub"], V.LSIZE)) == "1 file"
+
+        # A folder opened stays open when the tree is rebuilt under it.
+        view.tree.expand(model.index(rows["sub"], 0))
+        view.session.changed.emit()
+        rows = {model.node(model.index(r, 0)).name: r for r in range(model.rowCount())}
+        assert view.tree.isExpanded(model.index(rows["sub"], 0))
+        assert not view.tree.isExpanded(model.index(rows["extra"], 0))
+        view.collapse_all()
+        view.expand_differences()
+        assert view.tree.isExpanded(model.index(rows["extra"], 0))
+    finally:
+        window._may_close = lambda pages: True
+        window.close()
+
+
+def test_one_side_can_be_pointed_at_another_folder(qt_app, tmp_path):
+    window, tab = _folder_tab(qt_app, tmp_path)
+    try:
+        view = tab.folders
+        session = view.session
+        assert tab.heads[0].folder_mode and tab.heads[1].folder_mode
+        assert tab.heads[1].field.text().endswith("R")
+        other = tmp_path / "R2"
+        other.mkdir()
+        (other / "both.txt").write_bytes(b"one\n")
+        os.utime(other / "both.txt", (5_000_000, 5_000_000))
+        kept = session.sides[0].entries
+        assert tab.set_folder(1, str(other) + "/")
+        assert session.sides[0].entries is kept         # the left is not read again
+        assert _wait(lambda: session.tree is not None)
+        assert tab.session.sides[1].path == str(other)
+        assert "R2" in tab.title()
+        assert not tab.set_folder(1, str(other))        # already showing it
+
+        # Up from the right goes to its parent; the left stays.
+        tab.heads[1]._go_up()
+        assert session.sides[1].path == str(tmp_path)
+        assert session.sides[0].path.endswith("L")
+        assert _wait(lambda: session.tree is not None)
+
+        # A folder that is not there says so on its own side, with Retry.
+        tab.set_folder(0, str(tmp_path / "missing"))
+        assert _wait(lambda: session.sides[0].state == "failed")
+        assert tab.heads[0].again.isVisible() or not tab.isVisible()
+        assert tab.heads[0].state.text()
+    finally:
+        window._may_close = lambda pages: True
+        window.close()
+
+
+def test_a_row_can_become_the_folders_compared(qt_app, tmp_path):
+    window, tab = _folder_tab(qt_app, tmp_path)
+    try:
+        view = tab.folders
+        model = view.model
+        rows = {model.node(model.index(r, 0)).name: r for r in range(model.rowCount())}
+        node = model.node(model.index(rows["sub"], 0))
+        left, _right = view.session.paths(node)
+        view._rebase(node, left, "")                    # "Use as the left folder"
+        assert view.session.sides[0].path == left
+        assert view.session.sides[1].path.endswith("R")
+        assert _wait(lambda: view.session.tree is not None)
+        assert tab.session.sides[0].path == left
+    finally:
+        window._may_close = lambda pages: True
+        window.close()

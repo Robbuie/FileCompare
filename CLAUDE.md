@@ -312,7 +312,26 @@ must not shrink what Alt+Right copies.
   off the UI thread and opens it read-only. Only `.zip`: .docx, .xlsx and
   the other zip-shaped formats are documents.
 - Filters: name masks, show only differences, only one side, hide equal
-  folders.
+  folders. Since 1.15 the show buttons carry their counts
+  (`folders.show_counts`) and the pick is kept (`folders.show`, default
+  Differences).
+- Opens collapsed (1.15). A folder row's Size column is its rollup
+  (`_rollup`): "N differ", or a one-sided folder's file count. Expand opens
+  every folder holding a difference; `folders.open_expanded` brings back the
+  old opening (differing folders to depth 3). **Every model reset closes
+  every folder**, so `FolderView._rebuild` keeps the open folders by rel
+  (`_opened`) and puts them back -- after a content compare, a filter, a
+  walk again or a side moved. `forget_open` is for both sides moving at once.
+- Each side's header is its path box (1.15, `SideHead.set_folder_mode`):
+  Enter, Up, the parent/recent menu, browse, or a drop calls
+  `CompareTab.set_folder`, which runs `FolderSession.set_path` -- that side
+  walked again, the other side's entries kept -- and updates the
+  `core.Session` side's path so the title, Ctrl+Alt+S and swap agree. Paths
+  are handled as strings (`folders.tidy`, `ancestors`, `same_path`); whether
+  one is a folder is the walk's to say, and it says so on that side's
+  header. A row's menu re-roots one side or both (`FolderView.rebase`).
+  Ctrl+R on a folder tab walks again and never reloads `core.Session`,
+  which could turn the tab into a message if a side is no longer a folder.
 - Enter on a pair opens it in a new tab in the right mode.
 - Sync (1.0): update, mirror and picked rows, previewed in
   `ui/syncdialog.py` and run by File Manager's queue. See "Working with File

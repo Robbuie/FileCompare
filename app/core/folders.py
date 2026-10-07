@@ -28,6 +28,8 @@ everything here without a disk.
 from __future__ import annotations
 
 import fnmatch
+import ntpath
+import posixpath
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -425,3 +427,84 @@ def content_candidates(root: Node, *, all_pairs: bool = False) -> list[Node]:
         elif all_pairs and node.status == SAME:
             out.append(node)
     return out
+
+
+def show_counts(root: Node) -> dict[str, int]:
+    """How many files each show filter's button stands for (1.15), so the
+    buttons double as the summary: "Differences 132", "Same 4,920"."""
+    totals = counts(root)
+    differing = sum(n for k, n in totals.items() if k in DIFFERENT_KINDS)
+    return {
+        SHOW_ALL: sum(totals.values()),
+        SHOW_DIFFERENT: differing,
+        SHOW_LEFT: totals.get(ONLY_LEFT, 0) + totals.get(NEWER_LEFT, 0),
+        SHOW_RIGHT: totals.get(ONLY_RIGHT, 0) + totals.get(NEWER_RIGHT, 0),
+        SHOW_SAME: totals.get(SAME, 0) + totals.get(CONTENT_SAME, 0) + totals.get(HOUR_APART, 0),
+    }
+
+
+# ------------------------------------------------------------------ paths
+
+def _flavour(path: str):
+    """`ntpath` for anything Windows-shaped, `posixpath` for a POSIX path --
+    the tests and the preview tool run off Windows, as in `cli.resolve`."""
+    return posixpath if path.startswith("/") else ntpath
+
+
+def tidy(path: str) -> str:
+    """A folder path as typed or pasted, made the shape the rest expects:
+    quotes and spaces off the ends, no trailing separator except on a root
+    (`C:\\`, `\\\\server\\share\\`), a bare `D:` as its root. Strings only."""
+    path = path.strip().strip('"').strip()
+    if not path:
+        return ""
+    flavour = _flavour(path)
+    if flavour is ntpath:
+        path = path.replace("/", "\\")
+        if len(path) == 2 and path[1] == ":" and path[0].isalpha():
+            return path + "\\"
+        if path.startswith("\\\\"):
+            path = "\\\\" + ntpath.normpath(path[2:])
+        elif ntpath.isabs(path):
+            path = ntpath.normpath(path)
+        drive, rest = ntpath.splitdrive(path)
+        if rest in ("", "\\"):
+            return drive + "\\"
+        return path.rstrip("\\")
+    path = posixpath.normpath(path)
+    return path
+
+
+def same_path(a: str, b: str) -> bool:
+    """Whether two tidied paths name the same folder, ignoring case on Windows."""
+    a, b = tidy(a), tidy(b)
+    if _flavour(a) is ntpath:
+        return a.lower() == b.lower()
+    return a == b
+
+
+def ancestors(path: str) -> list[str]:
+    """The folders above `path`, nearest first, up to and including its root:
+    `S:\\Jobs\\1234\\PLC` gives `S:\\Jobs\\1234`, `S:\\Jobs`, `S:\\`. What the
+    Up button's menu lists (1.15). Strings only."""
+    out: list[str] = []
+    path = tidy(path)
+    flavour = _flavour(path)
+    while path:
+        up = tidy(flavour.dirname(path))
+        if not up or same_path(up, path):
+            break
+        out.append(up)
+        path = up
+    return out
+
+
+def rebased(rels, prefix: str) -> set[str]:
+    """Folder rels, lowercased, as they read from a folder `prefix` below the
+    old root: what stays open in the tree when "Compare these folders" moves
+    both sides down into one (1.15). Rels outside it are dropped."""
+    prefix = prefix.lower().strip("\\")
+    if not prefix:
+        return {r.lower() for r in rels}
+    head = prefix + "\\"
+    return {r.lower()[len(head):] for r in rels if r.lower().startswith(head)}

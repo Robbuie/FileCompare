@@ -72,6 +72,12 @@ DEFAULTS: dict[str, Any] = {
     "folders.by_content": False,
     # 1.9: list the files inside each .zip in folder compare.
     "folders.archives": True,
+    # 1.15: the show filter a folder compare opens with, whether it opens
+    # with the differing folders expanded (otherwise collapsed), and the
+    # folders the path boxes have shown lately, newest first.
+    "folders.show": "different",
+    "folders.open_expanded": False,
+    "folders.history": [],
 
     # Keep `name.ext.orig` beside a file the first time it is saved.
     "save.backup": False,

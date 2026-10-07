@@ -282,6 +282,10 @@ class MainWindow(QMainWindow):
             folder_hour=bool(self._config.get("folders.ignore_hour")),
             folder_by_content=bool(self._config.get("folders.by_content")),
             folder_archives=bool(self._config.get("folders.archives")),
+            folder_show=str(self._config.get("folders.show") or ""),
+            folder_open_expanded=bool(self._config.get("folders.open_expanded")),
+            folder_history=tuple(str(p) for p in self._config.get("folders.history") or []
+                                 if isinstance(p, str))[:20],
             mode=mode,
             format="text" if mode == "text" else "auto",
             syntax="auto" if self._config.get("view.syntax") else "off",
@@ -290,7 +294,7 @@ class MainWindow(QMainWindow):
             # 1.10: a session file's settings over the application's own.
             options = replace(
                 options, rules=saved.rules, intraline=saved.intraline,
-                folder_show=saved.folder_show, **{name: value for name, value in (
+                folder_show=saved.folder_show or options.folder_show, **{name: value for name, value in (
                     ("folder_mask", saved.folder_mask), ("folder_hour", saved.folder_hour),
                     ("folder_by_content", saved.folder_by_content),
                     ("folder_archives", saved.folder_archives)) if value is not None})

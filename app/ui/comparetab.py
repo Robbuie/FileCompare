@@ -20,7 +20,7 @@ from __future__ import annotations
 import ntpath
 import re
 
-from PySide6.QtCore import QDir, Qt, Signal
+from PySide6.QtCore import QDir, QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.core import folders as F
 from app.core import formats, siblings, syntax
 from app.core import session as core
 from app.core.diff import align
@@ -98,10 +99,19 @@ SAVE_ENCODINGS = (
 
 
 class SideHead(QWidget):
-    """The strip over one side: name, folder, what was detected, and trouble."""
+    """The strip over one side: name, folder, what was detected, and trouble.
+
+    Over a folder compare (1.15) it is that side's path box instead, as in
+    Beyond Compare: type or paste a folder and press Enter, go up a level,
+    pick a parent or a recent folder, browse, or drop a folder on it. Only
+    that side changes; the other stays as it is and is not read again.
+    """
 
     retry = Signal()
     menuRequested = Signal()
+    #: 1.15, folder compare: the folder this side should show now.
+    pathChosen = Signal(str)
+    browseRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -137,6 +147,132 @@ class SideHead(QWidget):
         box = QVBoxLayout(self)
         box.setContentsMargins(12, 7, 12, 7)
         box.addLayout(top)
+        self._top = top
+        self.folder_mode = False
+        self.path = ""
+        self.history: list[str] = []
+
+    # ------------------------------------------------- folder compare (1.15)
+
+    def set_folder_mode(self) -> None:
+        """The path box, in place of the name and where it is. Once a folder
+        tab, always one, so nothing has to undo this."""
+        if self.folder_mode:
+            return
+        self.folder_mode = True
+        self.name.hide()
+        self.where.hide()
+        self.facts.hide()
+        self.up = QToolButton()
+        self.up.setProperty("role", "nav")
+        self.up.setProperty("glyph", "up")
+        self.up.setFocusPolicy(Qt.NoFocus)
+        self.up.setToolTip("Up one folder on this side; the other side stays")
+        self.up.clicked.connect(lambda _c=False: self._go_up())
+        self.field = QLineEdit()
+        self.field.setProperty("role", "findfield")
+        self.field.setPlaceholderText("Type or paste a folder and press Enter")
+        self.field.setToolTip("This side's folder. Type or paste another and press Enter "
+                              "to compare it with the other side, or drop a folder here.")
+        self.field.returnPressed.connect(lambda: self.pathChosen.emit(self.field.text()))
+        self.field.installEventFilter(self)
+        self.places = QToolButton()
+        self.places.setProperty("role", "nav")
+        self.places.setProperty("glyph", "chevron_down")
+        self.places.setFocusPolicy(Qt.NoFocus)
+        self.places.setToolTip("Parent folders and recent folders")
+        self.places.setPopupMode(QToolButton.InstantPopup)
+        places = QMenu(self.places)
+        places.aboutToShow.connect(lambda: self._fill_places(places))
+        self.places.setMenu(places)
+        self.browse = QToolButton()
+        self.browse.setProperty("role", "nav")
+        self.browse.setProperty("glyph", "open")
+        self.browse.setFocusPolicy(Qt.NoFocus)
+        self.browse.setToolTip("Choose a folder for this side")
+        self.browse.clicked.connect(lambda _c=False: self.browseRequested.emit())
+        top = self._top
+        top.insertWidget(0, self.up)
+        top.insertWidget(1, self.field, 1)
+        top.insertWidget(2, self.places)
+        top.insertWidget(3, self.browse)
+        top.setSpacing(4)
+        self.layout().setContentsMargins(6, 4, 8, 4)
+        self.setAcceptDrops(True)
+
+    def apply_tokens(self, tokens: dict[str, str]) -> None:
+        if not self.folder_mode:
+            return
+        ratio = float(self.devicePixelRatioF() or 1.0)
+        for button in (self.up, self.places, self.browse):
+            button.setIcon(glyphs.icon(button.property("glyph"), colour=tokens["txt_1"],
+                                       muted=tokens["txt_2"], size=16, ratio=ratio))
+
+    def show_folder(self, path: str, state: str, error: str) -> None:
+        """The folder this side shows and how its walk is going."""
+        self.path = path
+        shown = display(path)
+        if not self.field.hasFocus() or not self.field.isModified():
+            self.field.setText(shown)
+            self.field.setModified(False)
+        self.field.setToolTip(shown or "No folder chosen")
+        self.up.setEnabled(bool(F.ancestors(path)))
+        text, tone, again = "", "", False
+        if state == "walking":
+            text = "Reading..."
+        elif state in ("failed", "not answering"):
+            text, tone, again = error or "Could not be read", "bad", True
+        self.state.setText(text)
+        self.state.setToolTip(text)
+        self.state.setProperty("state", tone)
+        self.state.style().unpolish(self.state)
+        self.state.style().polish(self.state)
+        self.again.setText("Retry")
+        self.again.setVisible(again)
+
+    def _go_up(self) -> None:
+        above = F.ancestors(self.path)
+        if above:
+            self.pathChosen.emit(above[0])
+
+    def _fill_places(self, menu: QMenu) -> None:
+        menu.clear()
+        above = F.ancestors(self.path)
+        if above:
+            menu.addSection("Up")
+            for path in above:
+                menu.addAction(display(path), lambda p=path: self.pathChosen.emit(p))
+        recent = [p for p in self.history if not F.same_path(p, self.path)][:12]
+        if recent:
+            menu.addSection("Recent")
+            for path in recent:
+                menu.addAction(display(path), lambda p=path: self.pathChosen.emit(p))
+        if not above and not recent:
+            menu.addAction("No parent or recent folders").setEnabled(False)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        """Escape in the path box puts back the folder being shown."""
+        if self.folder_mode and watched is self.field and event.type() == QEvent.KeyPress \
+                and event.key() == Qt.Key_Escape:
+            self.field.setText(display(self.path))
+            self.field.setModified(False)
+            self.field.clearFocus()
+            return True
+        return super().eventFilter(watched, event)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if self.folder_mode and _dropped_path(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        path = _dropped_path(event.mimeData()) if self.folder_mode else ""
+        if path:
+            event.acceptProposedAction()
+            self.pathChosen.emit(path)
+        else:
+            super().dropEvent(event)
 
     def show_side(self, side: core.Side, *, encoding_changed: bool = False) -> None:
         path = display(side.path)
@@ -191,6 +327,17 @@ class SideHead(QWidget):
             self.setProperty("active", value)
             self.style().unpolish(self)
             self.style().polish(self)
+
+
+def _dropped_path(mime) -> str:
+    """The first local path in a drag, or "". Strings only: whether it is a
+    folder is the walk's to find out, off the UI thread."""
+    if mime is None or not mime.hasUrls():
+        return ""
+    for url in mime.urls():
+        if url.isLocalFile():
+            return QDir.toNativeSeparators(url.toLocalFile())
+    return ""
 
 
 def _eol_now(endings: list[str]) -> str:
@@ -946,11 +1093,18 @@ class CompareTab(QWidget):
         """Ctrl+R. Asks first when it would throw edits away."""
         if self.session.dirty and not self._confirm_discard("Compare again from disk"):
             return
-        self.session.reload()
         if self.folders is not None:
+            # A folder tab walks again; the session's sides are only paths,
+            # and reading them again could turn a folder tab into a message
+            # if one side was pointed at something that is not a folder.
             self.folders.session.start()
+            return
+        self.session.reload()
 
     def _reload_side(self, index: int) -> None:
+        if self.folders is not None:
+            self.folders.session.retry(index)
+            return
         side = self.session.sides[index]
         if side.dirty and not self._confirm_discard("Reload this side"):
             return
@@ -1081,6 +1235,8 @@ class CompareTab(QWidget):
         self.view.apply_tokens(tokens)
         if self.folders is not None:
             self.folders.apply_tokens(tokens)
+        for head in self.heads:
+            head.apply_tokens(tokens)
         self.hex.apply_tokens(tokens)
         self.images.apply_tokens(tokens)
         self.table.apply_tokens(tokens)
@@ -1105,7 +1261,8 @@ class CompareTab(QWidget):
     def refresh(self) -> None:
         s = self.session
         for index, (head, side) in enumerate(zip(self.heads, s.sides)):
-            head.show_side(side, encoding_changed=s.encoding_changed(index))
+            if not head.folder_mode:
+                head.show_side(side, encoding_changed=s.encoding_changed(index))
         self._sync_toggles()
         self.view.set_editable(s.sides[0].editable, s.sides[1].editable)
         kind = s.kind
@@ -1370,9 +1527,20 @@ class CompareTab(QWidget):
                                    by_content=s.options.folder_by_content,
                                    archives=s.options.folder_archives,
                                    parent=self)
-            self.folders = FolderView(folder, self._tokens, mask=s.options.folder_mask)
+            self.folders = FolderView(folder, self._tokens, mask=s.options.folder_mask,
+                                      open_expanded=s.options.folder_open_expanded)
             if s.options.folder_show in F_SHOWS:
                 self.folders.set_show(s.options.folder_show)
+            # 1.15: each side's header becomes its path box.
+            self._folder_history = list(s.options.folder_history)
+            for index, head in enumerate(self.heads):
+                head.set_folder_mode()
+                head.history = self._folder_history
+                head.apply_tokens(self._tokens)
+                head.pathChosen.connect(lambda path, i=index: self.set_folder(i, path))
+                head.browseRequested.connect(lambda i=index: self._browse_folder(i))
+            folder.changed.connect(self._show_folder_heads)
+            self.folders.rebase.connect(self._rebase)
             self.folders.openPair.connect(self.openPair)
             self.folders.openExtracted.connect(self.openExtracted)
             self.folders.status.connect(self.status)
@@ -1384,6 +1552,51 @@ class CompareTab(QWidget):
             self.stack.addWidget(self.folders)
             folder.start()
         return self.folders
+
+    def _show_folder_heads(self) -> None:
+        if self.folders is None:
+            return
+        for head, side in zip(self.heads, self.folders.session.sides):
+            head.show_folder(side.path, side.state, side.error)
+
+    def set_folder(self, index: int, path: str) -> bool:
+        """Point one side of a folder tab at another folder (1.15). The other
+        side keeps its listing and its folder."""
+        path = F.tidy(path)
+        if self.folders is None or not path:
+            return False
+        if not self.folders.session.set_path(index, path):
+            self._show_folder_heads()
+            return False
+        self._moved(index, path)
+        return True
+
+    def _rebase(self, left: str, right: str) -> None:
+        """From a row's menu: one side, or both, moved into that folder."""
+        if self.folders is None:
+            return
+        self.folders.session.set_paths(left, right)
+        for index, path in ((0, left), (1, right)):
+            if path:
+                self._moved(index, path)
+
+    def _moved(self, index: int, path: str) -> None:
+        side = self.session.sides[index]
+        side.path = path
+        side.title = ""
+        history = self._folder_history
+        history[:] = [path] + [p for p in history if not F.same_path(p, path)]
+        del history[20:]
+        self.setting.emit("folders.history", list(history))
+        self._show_folder_heads()
+        self.titleChanged.emit()
+
+    def _browse_folder(self, index: int) -> None:
+        start = self.folders.session.sides[index].path if self.folders is not None else ""
+        chosen = QFileDialog.getExistingDirectory(
+            self, f"Choose the {'left' if index == 0 else 'right'} folder", start)
+        if chosen:
+            self.set_folder(index, QDir.toNativeSeparators(chosen))
 
     def _folder_side(self, side: int) -> None:
         """1.14: the header over the half F5 copies from is the focused one."""

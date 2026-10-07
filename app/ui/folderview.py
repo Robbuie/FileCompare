@@ -101,6 +101,16 @@ def _size(entry: F.Entry | None) -> str:
     return str(entry.size)
 
 
+def _rollup(node: F.Node) -> str:
+    """A folder's size column (1.15): how many files under it differ, so a
+    collapsed tree still says where to look."""
+    if node.status in (F.ONLY_LEFT, F.ONLY_RIGHT):
+        return f"{node.files:,} file{'s' if node.files != 1 else ''}" if node.files else ""
+    if node.differing:
+        return f"{node.differing:,} differ"
+    return ""
+
+
 def _time(entry: F.Entry | None) -> str:
     if entry is None or entry.is_dir or not entry.mtime:
         return ""
@@ -217,6 +227,8 @@ class FolderModel(QAbstractItemModel):
             if column in (LNAME, RNAME):
                 return node.name if entry is not None else ""
             if column in (LSIZE, RSIZE):
+                if node.is_dir and entry is not None:
+                    return _rollup(node)
                 return _size(entry)
             if column in (LTIME, RTIME):
                 return _time(entry)
@@ -516,9 +528,12 @@ class FolderView(QWidget):
     split = Signal(int, int)
     #: 1.14: which half is the active one, for the tab to mark its header.
     sideChanged = Signal(int)
+    #: 1.15: compare other folders: (left, right), "" for a side that stays.
+    rebase = Signal(str, str)
 
     def __init__(self, session: FolderSession, tokens: dict[str, str], *,
-                 mask: str = "", parent: QWidget | None = None) -> None:
+                 mask: str = "", open_expanded: bool = False,
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.session = session
         self.model = FolderModel(self)
@@ -570,12 +585,13 @@ class FolderView(QWidget):
             button.setProperty("role", "segment")
             button.setCheckable(True)
             button.setFocusPolicy(Qt.NoFocus)
-            button.clicked.connect(lambda _c=False, v=value: self.set_show(v))
+            button.clicked.connect(lambda _c=False, v=value: self.set_show(v, keep=True))
             seg.addWidget(button)
             self.shows[value] = button
         self.mask = QLineEdit(mask)
         self.mask.setProperty("role", "findfield")
         self.mask.setMaximumWidth(460)
+        self.mask.setMinimumWidth(150)
         self.mask.setPlaceholderText("*.L5X;*.ini  -.git;-*.bak")
         self._mask_label = QLabel("Filter")
         self._mask_label.setProperty("role", "hint")
@@ -664,16 +680,40 @@ class FolderView(QWidget):
         self.to_right.setToolTip("Copy the selected rows to the right folder (Alt+Right; "
                                  "F5 copies from the side you are on)")
         self.to_right.clicked.connect(lambda _c=False: self.copy_selected(S.TO_RIGHT))
+        # 1.15: the tree opens collapsed, with each folder's size column
+        # saying how many files under it differ; Expand opens just the
+        # folders that hold differences, its menu everything.
         self.expand = QToolButton()
         self.expand.setText("Expand")
         self.expand.setProperty("role", "retry")
+        self.expand.setPopupMode(QToolButton.MenuButtonPopup)
         self.expand.setFocusPolicy(Qt.NoFocus)
-        self.expand.clicked.connect(lambda _c=False: self.tree.expandAll())
+        self.expand.setToolTip("Open the folders that hold differences")
+        self.expand.clicked.connect(lambda _c=False: self.expand_differences())
+        expand_menu = QMenu(self)
+        expand_menu.addAction("Expand differences", self.expand_differences)
+        expand_menu.addAction("Expand all", self.tree.expandAll)
+        expand_menu.addAction("Collapse all", self.collapse_all)
+        expand_menu.addSeparator()
+        self._open_expanded = expand_menu.addAction("Open with differences expanded")
+        self._open_expanded.setCheckable(True)
+        self._open_expanded.setChecked(open_expanded)
+        self._open_expanded.setToolTip("Open each new comparison with the folders that hold "
+                                       "differences expanded, rather than collapsed")
+        self._open_expanded.toggled.connect(
+            lambda on: self.setting.emit("folders.open_expanded", bool(on)))
+        expand_menu.setToolTipsVisible(True)
+        self.expand.setMenu(expand_menu)
         self.collapse = QToolButton()
         self.collapse.setText("Collapse")
         self.collapse.setProperty("role", "retry")
         self.collapse.setFocusPolicy(Qt.NoFocus)
-        self.collapse.clicked.connect(lambda _c=False: self.tree.collapseAll())
+        self.collapse.clicked.connect(lambda _c=False: self.collapse_all())
+        #: 1.15: the folders open in the tree, by rel and lowercased, kept
+        #: across every rebuild -- a content compare, a filter, a walk again,
+        #: one side pointed somewhere else -- so the tree stays as it was left.
+        #: None until the first tree has been shown.
+        self._opened: set[str] | None = None
         # The summary is the status bar's to show; before 1.12 it was here as
         # well, word for word. The label stays for what reads it.
         self.line = QLabel()
@@ -711,7 +751,7 @@ class FolderView(QWidget):
         session.remote.connect(self._remote)
         self._dialog = None
         self.apply_tokens(tokens)
-        self.set_show(F.SHOW_ALL, rebuild=False)
+        self.set_show(F.SHOW_DIFFERENT, rebuild=False)
         self.refresh()
 
     # ----------------------------------------------------------- drawing
@@ -755,16 +795,70 @@ class FolderView(QWidget):
         self.tree.viewport().update()
 
     def refresh(self) -> None:
-        tree = self.session.tree
-        if tree is not self.model.root:
-            self.model.set_tree(tree)
-            if tree is not None:
-                self._expand_differences()
-        else:
-            self.model.refresh()
-            if tree is not None:
-                self._expand_differences()
+        self._rebuild(self.session.tree)
+        self._update_counts()
         self._progress()
+
+    def _rebuild(self, tree: F.Node | None, show: str | None = None) -> None:
+        """The model reset, with the open folders put back afterwards. A reset
+        closes every folder, and before 1.15 each one -- every batch of a
+        content compare -- opened them again its own way, undoing whatever the
+        user had closed."""
+        if self.model.root is not None:
+            self._opened = self.open_folders()
+        self.model.set_tree(tree, show)
+        if tree is None:
+            return
+        if self._opened is None:
+            self._opened = set()
+            if self._open_expanded.isChecked():
+                self._expand_differences()
+                return
+        self.reopen(self._opened)
+
+    def open_folders(self) -> set[str]:
+        """The rels of the folders open in the tree now, lowercased."""
+        out: set[str] = set()
+
+        def walk(parent: QModelIndex) -> None:
+            for row in range(self.model.rowCount(parent)):
+                index = self.model.index(row, 0, parent)
+                if self.tree.isExpanded(index):
+                    out.add(self.model.node(index).rel.lower())
+                    walk(index)
+        walk(QModelIndex())
+        return out
+
+    def reopen(self, rels: set[str]) -> None:
+        """Open the folders named, where the tree still has them."""
+        if not rels:
+            return
+
+        def walk(parent: QModelIndex) -> None:
+            for row in range(self.model.rowCount(parent)):
+                index = self.model.index(row, 0, parent)
+                node = self.model.node(index)
+                if node.is_dir and node.rel.lower() in rels:
+                    self.tree.expand(index)
+                    walk(index)
+        walk(QModelIndex())
+
+    def expand_differences(self) -> None:
+        """Every folder that holds a difference, all the way down (1.15)."""
+        self._expand_differences(limit=None)
+
+    def collapse_all(self) -> None:
+        self.tree.collapseAll()
+        self._opened = set()
+
+    def forget_open(self, keep: set[str] | None = None) -> None:
+        """The next tree opens with `keep` open -- or, given nothing, as a
+        new comparison does: for when both sides moved to other folders."""
+        self._opened = keep
+        if self.model.root is not None:
+            # The model's tree is the old one: let go of it now, so the next
+            # rebuild does not read the old tree's open folders over these.
+            self.model.set_tree(None)
 
     def _progress(self) -> None:
         text = self.session.status()
@@ -777,26 +871,40 @@ class FolderView(QWidget):
             self.line.setText(text)
         self.status.emit(text)
 
-    def _expand_differences(self) -> None:
-        """Open the folders that hold differences, down to a sensible depth.
-        A tree that opens collapsed hides the answer; one that opens fully
-        expanded on fifty thousand files hides it differently."""
+    def _expand_differences(self, limit: int | None = 3) -> None:
+        """Open the folders that hold differences: all of them when asked
+        for, or (`limit`) only near the top with few enough in each, which is
+        what "Open with differences expanded" does to a new comparison."""
         def walk(parent: QModelIndex, depth: int) -> None:
             for row in range(self.model.rowCount(parent)):
                 index = self.model.index(row, 0, parent)
                 node = self.model.node(index)
-                if node.is_dir and node.differing and depth < 3 and node.differing < 400:
-                    self.tree.expand(index)
-                    walk(index, depth + 1)
+                if not (node.is_dir and node.differing):
+                    continue
+                if limit is not None and (depth >= limit or node.differing >= 400):
+                    continue
+                self.tree.expand(index)
+                walk(index, depth + 1)
         walk(QModelIndex(), 0)
 
-    def set_show(self, show: str, rebuild: bool = True) -> None:
+    def set_show(self, show: str, rebuild: bool = True, *, keep: bool = False) -> None:
+        """`keep`: the user picked it, so it is kept for next time (1.15)."""
         for value, button in self.shows.items():
             button.setChecked(value == show)
         if rebuild or self.model.show != show:
-            self.model.set_tree(self.model.root, show)
-            if self.model.root is not None:
-                self._expand_differences()
+            self._rebuild(self.model.root, show)
+            self._update_counts()
+        if keep:
+            self.setting.emit("folders.show", show)
+
+    def _update_counts(self) -> None:
+        """The show buttons carry their counts (1.15), which makes them the
+        summary as well as the filter: one click from "Right newer 7" to the
+        seven."""
+        totals = F.show_counts(self.model.root) if self.model.root is not None else {}
+        for value, label in SHOW_LABELS:
+            count = totals.get(value)
+            self.shows[value].setText(f"{label}  {count:,}" if count is not None else label)
 
     # ----------------------------------------------------------- actions
 
@@ -983,6 +1091,21 @@ class FolderView(QWidget):
         if files:
             menu.addAction("Compare in a new tab\tEnter", self._open)
         menu.addAction("Compare contents", self._contents_selected)
+        # 1.15: Beyond Compare's "set as base folder": move one side, or both,
+        # down into the folder under the cursor.
+        here = nodes[0] if len(nodes) == 1 else None
+        if here is not None and here.is_dir and not here.member:
+            left, right = self.session.paths(here)
+            menu.addSeparator()
+            if here.left is not None and here.right is not None:
+                menu.addAction("Compare these two folders",
+                               lambda: self._rebase(here, left, right))
+            if here.left is not None:
+                menu.addAction("Use as the left folder",
+                               lambda: self._rebase(here, left, ""))
+            if here.right is not None:
+                menu.addAction("Use as the right folder",
+                               lambda: self._rebase(here, "", right))
         menu.addSeparator()
         ready = not self.session.syncing
         for label, direction, mode in (("Copy to the right...", S.TO_RIGHT, S.COPY),
@@ -1002,6 +1125,13 @@ class FolderView(QWidget):
                            lambda: QApplication.clipboard().setText(right))
         menu.aboutToHide.connect(menu.deleteLater)
         menu.popup(self.tree.viewport().mapToGlobal(point))
+
+    def _rebase(self, node: F.Node, left: str, right: str) -> None:
+        if left and right:
+            # Both sides moved down into this folder: what was open under it
+            # stays open, now one level nearer the top.
+            self.forget_open(F.rebased(self.open_folders(), node.rel))
+        self.rebase.emit(left, right)
 
     def focus(self) -> None:
         self.tree.setFocus(Qt.OtherFocusReason)

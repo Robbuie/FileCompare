@@ -157,8 +157,13 @@ class Options:
     folder_hour: bool = True
     folder_by_content: bool = False
     folder_archives: bool = True
-    #: 1.10: folder compare's show filter, from a saved session.
+    #: 1.10: folder compare's show filter, from a saved session; since 1.15
+    #: the one last picked when there is no session.
     folder_show: str = ""
+    #: 1.15: open a folder compare with the differing folders expanded.
+    folder_open_expanded: bool = False
+    #: 1.15: folders shown lately, newest first, for the path boxes.
+    folder_history: tuple[str, ...] = ()
     #: "auto" picks a format comparer by extension; "text" never does.
     format: str = "auto"
     #: Whether a detected format comparer starts switched on.

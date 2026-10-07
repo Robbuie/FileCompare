@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.15.0 - big folder compares, and changing either side's folder
+
+- **Folder compare opens collapsed and showing only the differences.** On a
+  big tree the old view opened with everything listed and the differing
+  folders expanded, which was a long scroll to find anything. Now each top
+  folder sits on one line, and its Size column says how many files under it
+  differ ("12 differ"), or for a folder on one side only, how many files it
+  holds.
+- **The show buttons carry their counts**: All 4,920, Differences 132, Left
+  newer 41, Right newer 7, Same 4,781. They are the summary as well as the
+  filter. The one you pick is kept for next time; it starts on Differences.
+- **Expand** opens every folder that holds a difference, all the way down.
+  Its menu has Expand all, Collapse all, and "Open with differences
+  expanded" for anyone who wants the old way back. Collapse is still beside
+  it.
+- **Folders you open or close stay that way** when the tree is rebuilt: after
+  a content compare, a filter change, Ctrl+R, or one side moved to another
+  folder. Before, every one of those opened the differing folders again.
+- **Each side's header is now its folder's path box**, as in Beyond Compare.
+  Type or paste a folder and press Enter, and only that side changes: the
+  other keeps its folder and is not read again, which matters when it is a
+  slow share. Escape puts the path back.
+  - **Up** (the arrow at the left) goes up one folder on that side.
+  - **The arrow beside the path** lists every folder above it, so you can go
+    straight up several levels, and the folders compared lately.
+  - **The folder button** browses for one.
+  - **Drop a folder** from File Manager or Explorer on a header to put it on
+    that side.
+  - A folder that is not there, or a share that stops answering, says so on
+    its own side, with Retry.
+- **Right-click a folder row** for "Compare these two folders" (both sides
+  move down into it, keeping what was open under it), "Use as the left
+  folder" and "Use as the right folder" -- the last two line up two trees
+  that are not at the same depth.
+- Ctrl+R in a folder compare reads both folders again and nothing else.
+
 ## 1.14.0 - copy across in folder compare
 
 - **F5 copies the selected files and folders to the other side**, as in
