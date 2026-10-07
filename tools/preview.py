@@ -74,6 +74,7 @@ def act(app, page, actions) -> None:
       select=S,A,B    select rows A to B on side S
       next            press next difference
       expand          open every folder of a folder compare
+      mode=VIEW       switch the View to text, rungs, table, hex or image
     """
     for action in actions or ():
         name, _, value = action.partition("=")
@@ -87,6 +88,8 @@ def act(app, page, actions) -> None:
             page.view.next_difference()
         elif name == "expand":
             page.folders.tree.expandAll()
+        elif name == "mode":
+            page.set_mode(value)
         else:
             page._command(name)
         for _ in range(3):

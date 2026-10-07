@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.16.0 - rungs as ladder
+
+- **View: Rungs** draws a Logix comparison (.L5X or .L5K) as ladder, the
+  left file's rungs opposite the right's: power rails, contacts, coils,
+  branches, and instruction boxes with their operands. Choose it from the
+  View button above the comparison; it is there whenever a Logix pair is
+  shown by its structure.
+- **The instruction that changed is the one coloured.** An edited contact is
+  amber on both sides, one only on the left is red, one only on the right is
+  green, and the rest of the rung stays plain. A rung that was added or
+  removed is coloured whole, with "not on this side" opposite it.
+- Each rung is headed by its program, routine and rung number on each side
+  (a renumbered rung shows both numbers), with its comment under it; a
+  comment that changed is amber.
+- **Differing rungs** lists only the rungs that differ; **All rungs** lists
+  the unchanged ones too, greyed. The bar says how many of how many differ.
+- Next and previous (the arrows, or Alt+Down and Alt+Up) step from one
+  differing rung to the next, and the count line names where you are.
+- **Double-click a rung, or press Enter, to see it in the text view**, at
+  the same place.
+- Long tags are written over two lines above a contact, broken after a `.`
+  or `_`, and a rung too wide for its half wraps onto a second line, as
+  Logix Designer wraps it. Hover over a rung for its full text.
+
 ## 1.15.0 - big folder compares, and changing either side's folder
 
 - **Folder compare opens collapsed and showing only the differences.** On a

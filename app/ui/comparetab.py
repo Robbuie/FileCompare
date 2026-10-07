@@ -50,11 +50,13 @@ from app.ui import glyphs
 from app.ui.diffview import DiffView
 from app.ui.folderview import FolderView
 from app.ui.hexview import HexView
+from app.ui.rungview import RungView
 from app.ui.imageview import ImageView
 from app.ui.tableview import TableView
 
 #: What the View switch offers, in order.
-VIEW_LABELS = {"text": "Text", "table": "Table", "hex": "Hex", "image": "Image"}
+VIEW_LABELS = {"text": "Text", "rungs": "Rungs", "table": "Table", "hex": "Hex",
+               "image": "Image"}
 
 
 def _syntax_job(lines: list[str], key: str):
@@ -533,6 +535,12 @@ class CompareTab(QWidget):
         self._launch_request = 0
         #: "auto", or what the View switch (or --mode) chose.
         self.mode = session.options.mode if session.options.mode in VIEW_LABELS else "auto"
+        # 1.16: a Logix pair's rungs drawn as ladder.
+        self.rungs = RungView()
+        self.rungs.currentChanged.connect(self._update_position)
+        self.rungs.openRow.connect(self._rung_to_text)
+        self.rungs.command.connect(self._command)
+        self._rungs_for = None
         self.hex = HexView()
         self.hex.currentChanged.connect(self._update_position)
         self.hex.command.connect(self._command)
@@ -573,6 +581,7 @@ class CompareTab(QWidget):
         self.stack.addWidget(self.view)
         self.stack.addWidget(self.handoff)
         self.stack.addWidget(self.hex)
+        self.stack.addWidget(self.rungs)
         self.stack.addWidget(self.images)
         self.stack.addWidget(self.table)
 
@@ -1238,6 +1247,7 @@ class CompareTab(QWidget):
         for head in self.heads:
             head.apply_tokens(tokens)
         self.hex.apply_tokens(tokens)
+        self.rungs.apply_tokens(tokens)
         self.images.apply_tokens(tokens)
         self.table.apply_tokens(tokens)
         if self.folders is None:
@@ -1276,6 +1286,8 @@ class CompareTab(QWidget):
             self._show_images()
         elif shown == "table":
             self._show_table()
+        elif shown == "rungs":
+            self._show_rungs()
         elif kind == core.TEXT and s.result is not None:
             if s.result is not self._shown_result:
                 self._shown_result = s.result
@@ -1294,7 +1306,7 @@ class CompareTab(QWidget):
             self.message.say(*self._explain(kind))
         current = self.stack.currentWidget()
         self._toolrow.setVisible(current in (self.view, self.message, self.hex, self.images,
-                                             self.table))
+                                             self.table, self.rungs))
         texty = current in (self.view, self.message)
         self._text_segments.setVisible(texty)
         for button in self._edit_buttons:
@@ -1320,6 +1332,8 @@ class CompareTab(QWidget):
         if all(l is not None and not l.binary for l in loaded) and not any(
                 l is not None and l.lossy for l in loaded):
             out.append("text")
+            if s.format_kind in ("l5x", "l5k") and s.structure:
+                out.append("rungs")
             from app.core import tables
 
             if all(tables.is_table(side.path) or not side.path for side in s.sides):
@@ -1436,6 +1450,28 @@ class CompareTab(QWidget):
             action.setChecked(mode == shown)
             action.triggered.connect(lambda _c=False, m=mode: self.set_mode(m))
 
+    def _show_rungs(self) -> None:
+        """1.16: the comparison's rungs as ladder. Read from the rows the text
+        view shows -- nothing is compared again."""
+        from app.core import ladder
+
+        self.stack.setCurrentWidget(self.rungs)
+        s = self.session
+        if s.result is not None and s.result is not self._rungs_for:
+            self._rungs_for = s.result
+            left, right = s.result_lines
+            crumbs = s.result_crumbs
+            self.rungs.set_pairs(ladder.pairs(s.result.rows, left, right,
+                                              crumbs[0] if crumbs else (),
+                                              crumbs[1] if crumbs else ()))
+            if self.rungs.canvas.current < 0:
+                self.rungs.go_first()
+
+    def _rung_to_text(self, row: int) -> None:
+        """A rung double-clicked: the same place in the text view."""
+        self.set_mode("text")
+        self.view.reveal(row)
+
     def _show_table(self) -> None:
         self.stack.setCurrentWidget(self.table)
         key = tuple(side.doc.revision if side.doc else -1 for side in self.session.sides) + \
@@ -1466,6 +1502,11 @@ class CompareTab(QWidget):
             _table_job, list(s.sides[0].lines), list(s.sides[1].lines), self.table.options)
 
     def _navigate(self, where: str) -> None:
+        if self.stack.currentWidget() is self.rungs:
+            {"first": self.rungs.go_first, "last": self.rungs.go_last,
+             "next": lambda: self.rungs.step(1),
+             "previous": lambda: self.rungs.step(-1)}[where]()
+            return
         if self.stack.currentWidget() is self.table:
             self.table.step(-1 if where in ("previous", "last") else 1)
             return
@@ -1714,6 +1755,28 @@ class CompareTab(QWidget):
 
     def _update_position(self) -> None:
         s = self.session
+        if self.stack.currentWidget() is self.rungs:
+            current, total = self.rungs.position()
+            for button in (self._first, self._prev, self._next, self._last):
+                button.setEnabled(total > 0)
+            if s.result is None:
+                text = "Comparing..."
+            elif not total:
+                text = "No rung differs"
+            else:
+                noun = "rung differs" if total == 1 else "rungs differ"
+                text = f"Rung {current} of {total} that differ" if current \
+                    else f"{total} {noun}"
+                pair = self.rungs.current_pair()
+                if current and pair is not None:
+                    rung = pair.right or pair.left
+                    text += f"  ·  {rung.crumb}"
+            self.count.setText(text)
+            self.count.setProperty("state", "same" if s.result is not None and not total
+                                   else "")
+            self.count.style().unpolish(self.count)
+            self.count.style().polish(self.count)
+            return
         if self.stack.currentWidget() is self.table:
             result = self.table.model.result
             total = len(result.differences) if result else 0
@@ -1911,6 +1974,8 @@ class CompareTab(QWidget):
             current.setFocus(Qt.OtherFocusReason)
         elif current is self.table:
             self.table.grid.setFocus(Qt.OtherFocusReason)
+        elif current is self.rungs:
+            self.rungs.focus()
         else:
             self.view.setFocus(Qt.OtherFocusReason)
 

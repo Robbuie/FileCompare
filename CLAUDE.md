@@ -367,6 +367,15 @@ or the formulas. The old binary `.xls` is compared as bytes and says why.
   The reader is forgiving -- an unknown block is kept if the file closes it,
   a statement missing its `;` ends at its block's END_ line -- and a file
   with no CONTROLLER block is refused and compared as text.
+- **Rung view (1.16)** -- View: Rungs on an L5X/L5K pair shown by its
+  structure. `core/ladder.py` (pure) parses each rung's neutral text into
+  series and branches, lays it out on a cell grid (top level wraps,
+  branches never split), matches the two rungs instruction by instruction
+  (`mark`), and picks the rung pairs out of the comparison's own rows
+  (`pairs`) -- nothing is compared again, and a removed-then-added rung in
+  one place is one pair. `ui/rungview.py` paints only the pairs on screen.
+  The parser keeps anything it does not understand as a box of its own
+  text; a rung is never dropped.
 - **XML** -- attribute order and insignificant whitespace ignored.
 - **JSON / INI** -- key order ignored.
 
