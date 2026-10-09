@@ -103,6 +103,11 @@ DEFAULTS: dict[str, Any] = {
 
     # Pairs compared lately, newest first, as [left, right].
     "recent": [],
+    # 1.21: what each recent pair found last time, by "left\nright":
+    # [summary, when]; and the sessions kept on Home, as
+    # {"name", "folder", "text"} (`core/library.py`).
+    "recent.notes": {},
+    "home.sessions": [],
 
     # The last folder each side of the start page browsed from.
     "start.left_folder": "",

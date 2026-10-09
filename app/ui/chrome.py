@@ -153,6 +153,10 @@ class ToolBar(QWidget):
             item = self._row.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                # Gone at once, not when the deferred delete gets round to
+                # it: until then the old button would still paint where it was.
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
         self.buttons = {}
         self._groups = []

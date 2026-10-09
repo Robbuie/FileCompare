@@ -260,6 +260,44 @@ QLabel[role="location"] {{
 }}
 QLineEdit[role="pathbox"] {{ background: {bg_2}; border: 1px solid {line}; }}
 
+/* 1.20: the sync list's plan bar. */
+QWidget[role="planbar"] {{ background: {bg_1}; border-top: 1px solid {line_soft}; }}
+QWidget[role="planbar"] QLabel {{ background: transparent; }}
+
+/* 1.21: Home. */
+QWidget[role="homeside"] {{ background: transparent; }}
+QWidget[role="homeside"] QLabel {{ background: transparent; }}
+QTreeWidget[role="sessions"], QTreeWidget[role="recentlist"] {{
+    background: {bg_2};
+    border: 1px solid {line_soft};
+    border-radius: {radius_lg};
+    outline: none;
+    padding: 4px;
+}}
+QTreeWidget[role="recentlist"] {{ border-radius: {radius}; }}
+QTreeWidget[role="sessions"]::item, QTreeWidget[role="recentlist"]::item {{
+    padding: 4px 4px;
+    border-radius: {radius_sm};
+}}
+QTreeWidget[role="sessions"]::item:hover, QTreeWidget[role="recentlist"]::item:hover {{
+    background: {bg_3};
+}}
+QTreeWidget[role="sessions"]::item:selected, QTreeWidget[role="recentlist"]::item:selected {{
+    background: {accent_row};
+    color: {txt_0};
+}}
+QToolButton[role="tile"] {{
+    background: {bg_1};
+    border: 1px solid {line_soft};
+    border-radius: {radius};
+    color: {txt_0};
+    padding: 8px 12px;
+    text-align: left;
+    min-height: 56px;
+}}
+QToolButton[role="tile"]:hover {{ border: 1px solid {accent_line}; background: {bg_3}; }}
+QToolButton[role="tile"]:checked {{ border: 1px solid {accent_line}; background: {accent_soft}; }}
+
 /* ----------------------------------------------------------------- dialogs */
 
 QDialog QLabel {{ background: transparent; color: {txt_0}; }}

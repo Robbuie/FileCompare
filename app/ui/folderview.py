@@ -45,7 +45,6 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QStyle,
     QStyledItemDelegate,
-    QToolButton,
     QTreeView,
     QVBoxLayout,
     QWidget,

@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.21.0 - Home
+
+The last of the five releases reworking the window (1.17 to 1.21).
+
+- **A new tab opens to Home** (Ctrl+T, or Home on the toolbar), in place of
+  the plain start page.
+- **Saved sessions** down the left, in folders of your own. Session > Add
+  to Home keeps the comparison you are looking at -- its two paths, rules,
+  filter and pins -- under a name and a folder. Double-click one to open it
+  fresh from disk. Right-click to rename it, move it to another folder or a
+  new one, or remove it from Home. They are kept in File Compare's settings;
+  session files saved with Ctrl+Alt+S still work as before.
+- **A tile for each kind of comparison**: Folders, Text, Table, Hex, Image,
+  Three-way merge (it asks for the three files), PDF and drawings (opened in
+  Redline PDF or DWG Viewer), and a saved session file. A tile sets what the
+  two path boxes compare as, and their Browse buttons pick folders or files
+  to suit.
+- **Recent comparisons**, newest first, each with what it found last time
+  ("9 of 11 differ", "5 differences", "Same") and when. Click one to
+  compare it again.
+
 ## 1.20.0 - the sync list
 
 - **Folder compare has a second layout, the sync list** (Sync list on the

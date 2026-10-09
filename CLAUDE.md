@@ -505,7 +505,11 @@ after mockups of several tools' ideas:
   Synchronize Directories is the model.
 - **Home** (1.21): what a new tab opens to. Saved sessions in folders on the
   left, a tile for each kind of compare, a quick two-path row, and recent
-  comparisons with their last result.
+  comparisons with their last result. Home's sessions are not files: `core/library.py` keeps
+  `{name, folder, text}` entries in the settings (`home.sessions`), the text
+  being what a `.fcsession` file would hold, so opening one never touches a
+  disk until the comparison itself reads its sides. What each recent pair
+  found is `recent.notes`, written as a tab's result arrives.
 
 Logix is not the centre of this application. Most of the user's L5X work is
 done in LogicControl; here L5X and L5K are one compare mode among many and

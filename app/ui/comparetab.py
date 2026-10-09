@@ -1215,6 +1215,19 @@ class CompareTab(QWidget):
     def tooltip(self) -> str:
         return "\n".join(display(side.path) for side in self.session.sides)
 
+    def summary(self) -> str | None:
+        """What this comparison found, in a few words, for Home (1.21)."""
+        s = self.session
+        if self.folders is not None:
+            tree = self.folders.session.tree
+            return F.summary(tree).split("  \u00b7  ")[0] if tree is not None else None
+        if s.kind == core.TEXT and s.result is not None and s.current:
+            n = len(s.result.differences)
+            return "Same" if not n else f"{n:,} difference{'s' if n != 1 else ''}"
+        if s.kind == core.BINARY:
+            return "Identical" if s.byte_identical else "Files differ"
+        return None
+
     def refresh(self) -> None:
         s = self.session
         for index, (head, side) in enumerate(zip(self.heads, s.sides)):
@@ -1293,7 +1306,6 @@ class CompareTab(QWidget):
     LIST_LIMIT = 3000
 
     def _fill_sidebar(self) -> None:
-        from app.core import outline
         from app.core.diff import align as A
 
         s = self.session
@@ -1862,6 +1874,7 @@ class CompareTab(QWidget):
 
     def _update_position(self) -> None:
         s = self.session
+        self._show_location()
         if self.stack.currentWidget() is self.rungs:
             current, total = self.rungs.position()
             if s.result is None:

@@ -13,6 +13,7 @@ drop of two files on the window.
 from __future__ import annotations
 
 import ntpath
+import time
 from dataclasses import replace
 
 from PySide6.QtCore import QEvent, QPoint, Qt
@@ -272,11 +273,18 @@ class MainWindow(QMainWindow):
     def new_tab(self, left: str = "", right: str = "") -> StartTab:
         recent = [tuple(pair) for pair in self._config.get("recent")
                   if isinstance(pair, list) and len(pair) == 2]
+        notes = self._config.get("recent.notes")
         page = StartTab((self._config.get("start.left_folder"),
-                         self._config.get("start.right_folder")), recent=recent)
+                         self._config.get("start.right_folder")), recent=recent,
+                        notes=notes if isinstance(notes, dict) else {},
+                        sessions=self._config.get("home.sessions") or [])
+        page.apply_tokens(self._tokens)
         page.set_paths(left, right)
         page.compareRequested.connect(lambda l, r, p=page: self._start_to_compare(p, l, r))
         page.sessionRequested.connect(self.open_session)
+        page.savedRequested.connect(self.open_saved)
+        page.mergeRequested.connect(lambda mine, theirs, base: self.merge(mine, theirs, base))
+        page.libraryChanged.connect(self._library_changed)
         page.browsed.connect(lambda side, folder: self._config.set(
             "start.left_folder" if side == 0 else "start.right_folder", folder))
         self._add_page(page)
@@ -285,7 +293,7 @@ class MainWindow(QMainWindow):
     def _start_to_compare(self, start: StartTab, left: str, right: str) -> None:
         """The start page becomes the comparison, in the same tab."""
         index = self._index_of(start)
-        tab = self._compare_page(left, right)
+        tab = self._compare_page(left, right, mode=getattr(start, "mode", "auto"))
         self.pages.removeWidget(start)
         self.tabs.removeTab(index)
         start.deleteLater()
@@ -491,7 +499,7 @@ class MainWindow(QMainWindow):
                 button.setIcon(glyphs.icon("close", colour=self._tokens["txt_2"],
                                            muted=self._tokens["txt_2"], size=10))
         for page in self._pages():
-            if isinstance(page, (CompareTab, MergeTab)):
+            if isinstance(page, (CompareTab, MergeTab, StartTab)):
                 page.apply_tokens(self._tokens)
         where = "File Manager's look" if source == "file manager" else "own look"
         self._status_right.setText(
@@ -540,6 +548,8 @@ class MainWindow(QMainWindow):
     def _page_changed(self, page) -> None:
         """A page's commands, title or position changed: the toolbar and the
         position in the status bar follow the current page only."""
+        if isinstance(page, CompareTab):
+            self._note_result(page)
         if page is not self._page():
             return
         self.toolbar.set_kind(self._kind())
@@ -547,9 +557,67 @@ class MainWindow(QMainWindow):
         count = getattr(page, "count", None)
         self._position.setText(count.text() if count is not None else "")
 
+    # ------------------------------------------------------------ Home (1.21)
+
+    def _note_result(self, tab: CompareTab) -> None:
+        """What a comparison found, kept beside its pair for Home's recent
+        list ("6 differences", "Same")."""
+        summary = tab.summary()
+        if not summary:
+            return
+        key = "\n".join(side.path for side in tab.session.sides)
+        notes = self._config.get("recent.notes")
+        notes = dict(notes) if isinstance(notes, dict) else {}
+        old = notes.get(key)
+        if isinstance(old, list) and old and old[0] == summary:
+            return
+        notes[key] = [summary, time.time()]
+        pairs = {"\n".join(p) for p in self._config.get("recent") or [] if isinstance(p, list)}
+        notes = {k: v for k, v in notes.items() if k in pairs or k == key}
+        self._config.set("recent.notes", notes)
+
+    def open_saved(self, text: str) -> None:
+        """A session kept on Home: opened as a session file would be."""
+        try:
+            saved = savedsession.loads(text)
+        except ValueError as exc:
+            self.flash(f"That session could not be opened: {exc}")
+            return
+        self.compare(saved.left, saved.right, titles=saved.titles,
+                     readonly=set(saved.readonly), mode=saved.mode, saved=saved)
+
+    def _library_changed(self, entries) -> None:
+        self._config.set("home.sessions", list(entries))
+        for page in self._pages():
+            if isinstance(page, StartTab) and page.sessions != entries:
+                page.set_sessions(entries)
+
+    def add_to_home(self) -> None:
+        """Session > Add to Home: this comparison's setup, kept on Home under
+        a name and a folder."""
+        from PySide6.QtWidgets import QInputDialog
+
+        from app.core import library
+
+        page = self._page()
+        if not isinstance(page, CompareTab):
+            return
+        name, ok = QInputDialog.getText(self, "Add to Home", "Name:",
+                                        text=page.title().lstrip("* ").replace("  vs  ", " vs "))
+        if not ok or not name.strip():
+            return
+        entries = library.clean(self._config.get("home.sessions") or [])
+        folders = library.folders(entries) or [library.UNFILED]
+        folder, ok = QInputDialog.getItem(self, "Add to Home", "Folder:", folders, 0, True)
+        if not ok:
+            return
+        entries = library.add(entries, name, folder, page.saved_session())
+        self._library_changed(entries)
+        self.flash(f"Added {name.strip()} to Home")
+
     #: Commands the window answers itself, whatever the page.
     WINDOW = frozenset({
-        "new", "open-session", "close-tab", "next-tab", "previous-tab", "exit", "keys",
+        "new", "open-session", "add-to-home", "close-tab", "next-tab", "previous-tab", "exit", "keys",
         "check-updates", "about", "follow-look", "syntax-default", "keep-orig",
         "updates-on-launch"})
 
@@ -562,6 +630,8 @@ class MainWindow(QMainWindow):
                 "keep-orig": bool(config.get("save.backup")),
                 "updates-on-launch": bool(config.get("updates.check_on_launch")),
             }.get(id_)
+            if id_ == "add-to-home":
+                return State(enabled=isinstance(self._page(), CompareTab))
             return State(checked=checked)
         if id_ in (">recent", ">theme", ">accent", ">density", ">colours"):
             return State()
@@ -578,6 +648,8 @@ class MainWindow(QMainWindow):
             self.new_tab()
         elif id_ == "open-session":
             self._browse_session()
+        elif id_ == "add-to-home":
+            self.add_to_home()
         elif id_ == "close-tab":
             self.close_page()
         elif id_ == "next-tab":

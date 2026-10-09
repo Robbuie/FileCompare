@@ -62,8 +62,10 @@ def _c(id: str, label: str, key: str = "", glyph: str = "", tool: str = "", tip:
 
 COMMANDS: dict[str, Command] = {c.id: c for c in (
     # Session
-    _c("new", "New comparison", "Ctrl+T", "plus", "New",
-       "Start a new comparison in a new tab (Ctrl+T)"),
+    _c("new", "Home", "Ctrl+T", "home", "Home",
+       "Saved sessions, recent comparisons, and a new one, in a new tab (Ctrl+T)"),
+    _c("add-to-home", "Add to Home...", "", "", "",
+       "Keep this comparison's setup on Home, under a name and a folder"),
     _c("open-session", "Open session...", "Ctrl+O", "sessions", "Sessions",
        "Open a comparison saved as a session file"),
     _c("save-session", "Save session...", "Ctrl+Alt+S", "save", "",
@@ -224,7 +226,7 @@ DYNAMIC = {
 #: The menu bar: (title, items). An item is a command id, "-" for a
 #: separator, or ">name" for a submenu from DYNAMIC.
 MENUS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("&Session", ("new", "open-session", "save-session", ">recent", "-",
+    ("&Session", ("new", "open-session", "save-session", "add-to-home", ">recent", "-",
                   "next-tab", "previous-tab", "close-tab", "-", "exit")),
     ("&File", ("open-left", "open-right", "reload", "-", "save", "save-all", "save-as", "-",
                ">side-left", ">side-right", "-", "report", "copy-paths")),
