@@ -92,6 +92,11 @@ DEFAULTS: dict[str, Any] = {
     "folders.show": "different",
     "folders.open_expanded": False,
     "folders.history": [],
+    # 1.20: "trees" (the two trees) or "list" (the sync list), and the
+    # categories the sync list shows.
+    "folders.layout": "trees",
+    "folders.categories": ["different", "left newer", "only left", "only right",
+                           "right newer"],
 
     # Keep `name.ext.orig` beside a file the first time it is saved.
     "save.backup": False,

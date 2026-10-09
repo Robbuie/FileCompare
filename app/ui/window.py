@@ -322,6 +322,8 @@ class MainWindow(QMainWindow):
             details=bool(self._config.get("view.details")),
             sidebar=bool(self._config.get("view.sidebar")),
             layout=str(self._config.get("view.layout") or "sbs"),
+            folder_layout=str(self._config.get("folders.layout") or "trees"),
+            folder_categories=tuple(self._config.get("folders.categories") or ()),
             file_history=self._file_history(),
         )
         if saved is not None:

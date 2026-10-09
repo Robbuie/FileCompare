@@ -1640,7 +1640,9 @@ class CompareTab(QWidget):
                                    archives=s.options.folder_archives,
                                    parent=self)
             self.folders = FolderView(folder, self._tokens, mask=s.options.folder_mask,
-                                      open_expanded=s.options.folder_open_expanded)
+                                      open_expanded=s.options.folder_open_expanded,
+                                      layout=s.options.folder_layout,
+                                      categories=s.options.folder_categories)
             if s.options.folder_show in F_SHOWS:
                 self.folders.set_show(s.options.folder_show)
             # 1.15: each side's header becomes its path box.

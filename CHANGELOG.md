@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.20.0 - the sync list
+
+- **Folder compare has a second layout, the sync list** (Sync list on the
+  toolbar; Two trees goes back). One list: the left file's size and time,
+  what will happen in the middle, the right file's time and size, and the
+  result in words -- "Left is newer", "Only on the right", "Same time,
+  different size", "Contents differ". It is Total and Double Commander's
+  Synchronize Directories.
+- **The arrow in the middle is the plan.** It starts as what an update each
+  way would do: copy what is newer or only on one side, leave a pair with
+  the same time and different contents alone. Click an arrow to turn it
+  round or leave the row out; untick a row's box to leave it; Alt+Right and
+  Alt+Left set the selected rows, Space ticks and unticks. An arrow you
+  changed is drawn in plain ink rather than the accent.
+- **Left only, Left newer, Different, Same, Right newer, Right only** beside
+  the name filter, with their counts, choose what the list shows. Same is
+  off to start with.
+- **The plan bar** under the list says how much goes each way. Run in File
+  Manager hands it to File Manager's queue, one direction after the other.
+  Rows left as they were go as an update, so a file that changed on the
+  target since the walk is still not overwritten; rows you turned round
+  replace what is there. Nothing is removed by the list; Mirror is still in
+  the Sync menu, with its preview.
+- The layout and the categories you pick are kept.
+
 ## 1.19.0 - a differences list, Fluid and Unified
 
 - **A list of every difference** beside the files (the List button, View >

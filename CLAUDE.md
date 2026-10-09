@@ -336,6 +336,16 @@ must not shrink what Alt+Right copies.
 - Sync (1.0): update, mirror and picked rows, previewed in
   `ui/syncdialog.py` and run by File Manager's queue. See "Working with File
   Manager".
+- **Sync list (1.20)**, the folder tab's second layout (`ui/synclist.py`,
+  `core/synclist.py`): one row per file with an action -- copy right, copy
+  left, leave -- defaulting to what an update each way would copy. Running
+  it asks `syncplan.plan` again per direction: rows left at their default as
+  an UPDATE (newer-only, so a target that changed after the walk is safe),
+  rows turned by hand as a picked COPY (overwrite). Each is one request, and
+  `FolderView._queue` sends them one at a time, since File Manager takes one
+  at a time from a tab. The list never removes anything; Mirror stays in the
+  Sync menu, with its preview. A row inside a folder that is on one side only
+  has no action of its own: the folder is copied whole.
 
 **Hex / binary** -- side by side, aligned by offset, differing bytes marked.
 The fallback for anything that will not decode, and the right answer for

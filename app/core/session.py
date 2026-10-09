@@ -183,6 +183,10 @@ class Options:
     #: "sbs" (side by side), "fluid" or "unified".
     sidebar: bool = True
     layout: str = "sbs"
+    #: 1.20: folder compare's layout, "trees" or "list", and the sync list's
+    #: categories shown.
+    folder_layout: str = "trees"
+    folder_categories: tuple[str, ...] | None = None
 
 
 class Session(QObject):

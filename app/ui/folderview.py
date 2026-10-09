@@ -41,6 +41,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
+    QMessageBox,
+    QStackedWidget,
     QStyle,
     QStyledItemDelegate,
     QToolButton,
@@ -50,6 +52,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core import folders as F
+from app.core import synclist as L
 from app.core import syncplan as S
 from app.core.folderdiff import FolderSession
 from app.ui import fileicons, glyphs
@@ -89,6 +92,25 @@ SHOW_LABELS = (
     (F.SHOW_RIGHT, "Right newer"),
     (F.SHOW_SAME, "Same"),
 )
+
+#: 1.20: the sync list's category toggles, by command.
+CATEGORY_COMMANDS = {
+    "cat-lonly": L.ONLY_LEFT,
+    "cat-lnew": L.LEFT_NEWER,
+    "cat-diff": L.DIFFERENT,
+    "cat-same": L.SAME,
+    "cat-rnew": L.RIGHT_NEWER,
+    "cat-ronly": L.ONLY_RIGHT,
+}
+
+CATEGORY_LABELS = {
+    L.ONLY_LEFT: "Left only",
+    L.LEFT_NEWER: "Left newer",
+    L.DIFFERENT: "Different",
+    L.SAME: "Same",
+    L.RIGHT_NEWER: "Right newer",
+    L.ONLY_RIGHT: "Right only",
+}
 
 #: 1.17: the toolbar's show buttons, by command.
 SHOW_COMMANDS = {
@@ -544,8 +566,8 @@ class FolderView(QWidget):
     commandsChanged = Signal()
 
     def __init__(self, session: FolderSession, tokens: dict[str, str], *,
-                 mask: str = "", open_expanded: bool = False,
-                 parent: QWidget | None = None) -> None:
+                 mask: str = "", open_expanded: bool = False, layout: str = "trees",
+                 categories=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.session = session
         self.model = FolderModel(self)
@@ -620,15 +642,56 @@ class FolderView(QWidget):
         bar.setSpacing(6)
         bar.addWidget(self._mask_label)
         bar.addWidget(self.mask, 1)
+        # 1.20: the sync list's categories, as switches with their counts,
+        # beside the name filter (shown with the list only).
+        self.categories = QWidget()
+        self.categories.setProperty("role", "segments")
+        self.categories.setAttribute(Qt.WA_StyledBackground, True)
+        chips = QHBoxLayout(self.categories)
+        chips.setContentsMargins(2, 2, 2, 2)
+        chips.setSpacing(2)
+        self.chips: dict[str, QPushButton] = {}
+        for command, category in CATEGORY_COMMANDS.items():
+            chip = QPushButton(CATEGORY_LABELS[category])
+            chip.setProperty("role", "segment")
+            chip.setCheckable(True)
+            chip.setFocusPolicy(Qt.NoFocus)
+            chip.clicked.connect(lambda _c=False, c=category: self.set_category(c))
+            chips.addWidget(chip)
+            self.chips[category] = chip
+        bar.addWidget(self.categories)
         top = QWidget()
         top.setProperty("role", "folderbar")
         top.setAttribute(Qt.WA_StyledBackground, True)
         top.setLayout(bar)
+        # 1.20: the sync list, the other way to look at the same comparison.
+        from app.ui.synclist import SyncList
+
+        self.synclist = SyncList(self.model.icons)
+        if categories is not None:
+            self.synclist.model.shown = {c for c in categories if c in L.CATEGORIES}
+        self.synclist.run.connect(self.run_list)
+        self.synclist.tree.command.connect(self._list_command)
+        self.synclist.tree.doubleClicked.connect(lambda _i: self._open())
+        self.synclist.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.synclist.tree.customContextMenuRequested.connect(self._context)
+        self.synclist.tree.selectionModel().selectionChanged.connect(
+            lambda *_a: self._update_copies())
+        self.synclist.model.dataChanged.connect(lambda *_a: self.commandsChanged.emit())
+        self.layout_name = layout if layout in ("trees", "list") else "trees"
+        self._list_for = None
+        #: Requests the sync list made, waiting their turn for File Manager.
+        self._queue: list[dict] = []
+        self.views = QStackedWidget()
+        self.views.addWidget(self.tree)
+        self.views.addWidget(self.synclist)
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(0)
         box.addWidget(top)
-        box.addWidget(self.tree, 1)
+        box.addWidget(self.views, 1)
+        self.views.setCurrentWidget(self.synclist if self.layout_name == "list" else self.tree)
+        self._show_chips()
 
         session.changed.connect(self.refresh)
         session.progressed.connect(self._progress)
@@ -646,6 +709,7 @@ class FolderView(QWidget):
         # sizes line up by being right-aligned, not by being monospaced.
         self.model.tokens = tokens
         self._size_columns()
+        self.synclist.apply_tokens(tokens)
         self.tree.viewport().update()
 
     def _size_columns(self) -> None:
@@ -674,11 +738,123 @@ class FolderView(QWidget):
 
     def _icons_arrived(self) -> None:
         self.tree.viewport().update()
+        self.synclist.tree.viewport().update()
 
     def refresh(self) -> None:
         self._rebuild(self.session.tree)
+        self._fill_list()
+        self._show_chips()
         self._update_counts()
         self._progress()
+        self._send_next()
+
+    # ------------------------------------------------- the sync list (1.20)
+
+    def _fill_list(self, force: bool = False) -> None:
+        """The list follows the tree, but only while it is the one shown:
+        working out every row's default costs a walk of the tree."""
+        tree = self.session.tree
+        if self.layout_name != "list" or (tree is self._list_for and not force):
+            return
+        self._list_for = tree
+        self.synclist.set_tree(tree)
+
+    def _show_chips(self) -> None:
+        listed = self.layout_name == "list"
+        self.categories.setVisible(listed)
+        if not listed:
+            return
+        counts = self.synclist.model.counts() if self.session.tree is not None else {}
+        for category, chip in self.chips.items():
+            chip.setChecked(category in self.synclist.model.shown)
+            count = counts.get(category)
+            label = CATEGORY_LABELS[category]
+            chip.setText(f"{label}  {count:,}" if count is not None else label)
+
+    def set_layout(self, layout: str) -> None:
+        self.layout_name = layout if layout in ("trees", "list") else "trees"
+        self.views.setCurrentWidget(self.synclist if self.layout_name == "list" else self.tree)
+        self._fill_list()
+        self._show_chips()
+        self.setting.emit("folders.layout", self.layout_name)
+        self.commandsChanged.emit()
+        self.focus()
+
+    def set_category(self, category: str) -> None:
+        shown = set(self.synclist.model.shown)
+        shown ^= {category}
+        self.synclist.model.set_shown(shown)
+        if self.session.tree is not None and sum(1 for _ in self.session.tree.walk()) < 3000:
+            self.synclist.tree.expandAll()
+        self.setting.emit("folders.categories", sorted(shown))
+        self._show_chips()
+        self.commandsChanged.emit()
+
+    def run_list(self) -> None:
+        """Hand the list's copies to File Manager, one request per direction
+        and kind, sent one after another."""
+        session = self.session
+        root = session.tree
+        if root is None:
+            return
+        if session.syncing or self._queue:
+            self.status.emit("A sync is already with File Manager; this comparison is "
+                             "read again when it finishes.")
+            return
+        refused = S.refusal(session.sides[0].path, session.sides[1].path)
+        if refused:
+            self.status.emit(refused)
+            return
+        titles = (session.sides[0].title, session.sides[1].title)
+        made = L.requests(root, self.synclist.model.decisions, session.sides[0].path,
+                          session.sides[1].path, titles=titles)
+        if not made:
+            self.status.emit("Nothing to copy")
+            return
+        lines = []
+        for plan, _request in made:
+            way = "right" if plan.direction == S.TO_RIGHT else "left"
+            copies = plan.copies
+            files = sum(a.files if a.is_dir else 1 for a in copies)
+            how = ("newer only" if plan.mode == S.UPDATE else "replacing what is there")
+            lines.append(f"Copy {files:,} file{'s' if files != 1 else ''} to the {way} ({how})")
+        skipped = sum(len(plan.skipped) for plan, _r in made)
+        if skipped:
+            lines.append(f"{skipped:,} left alone: their folder is not on the other side, "
+                         "or something under them could not be read or is a link")
+        box = QMessageBox(self)
+        box.setWindowTitle("Run the sync list")
+        box.setText("Hand these copies to File Manager's queue?")
+        box.setInformativeText("\n".join(lines) + "\n\nNothing is removed.")
+        go = box.addButton("Run in File Manager", QMessageBox.AcceptRole)
+        box.addButton(QMessageBox.Cancel)
+        box.exec()
+        if box.clickedButton() is not go:
+            return
+        self._queue = [request for _plan, request in made]
+        self._send_next()
+
+    def _send_next(self) -> None:
+        session = self.session
+        if not self._queue or session.syncing or session.busy:
+            return
+        if session.send_sync(self._queue[0]):
+            self._queue.pop(0)
+            if self._queue:
+                self.status.emit("Sent to File Manager; the other direction follows when "
+                                 "it finishes")
+
+    def _list_command(self, name: str) -> None:
+        if name == "toggle":
+            index = self.synclist.tree.currentIndex()
+            node = self.synclist.model.node(index)
+            if node is not None and L.choices(node):
+                checked = self.synclist.model.decisions.action(node) != L.SKIP
+                self.synclist.model.setData(self.synclist.model.index(
+                    index.row(), 0, index.parent()),
+                    Qt.Unchecked if checked else Qt.Checked, Qt.CheckStateRole)
+            return
+        self._command(name)
 
     def _rebuild(self, tree: F.Node | None, show: str | None = None) -> None:
         """The model reset, with the open folders put back afterwards. A reset
@@ -785,6 +961,8 @@ class FolderView(QWidget):
     # ----------------------------------------------------------- actions
 
     def selected(self) -> list[F.Node]:
+        if self.layout_name == "list":
+            return self.synclist.selected()
         rows = self.tree.selectionModel().selectedRows(0) if self.tree.selectionModel() else []
         return [self.model.node(index) for index in rows]
 
@@ -839,7 +1017,17 @@ class FolderView(QWidget):
 
     def copy_selected(self, direction: str) -> None:
         """The selected rows copied one way (1.14): the preview first, where
-        rows with nothing to copy say so, then File Manager's queue."""
+        rows with nothing to copy say so, then File Manager's queue. In the
+        sync list (1.20) it turns the rows' arrows that way instead; the
+        list's Run sends them."""
+        if self.layout_name == "list":
+            nodes = self.selected()
+            done = self.synclist.model.set_action(
+                nodes, L.RIGHT if direction == S.TO_RIGHT else L.LEFT)
+            way = "right" if direction == S.TO_RIGHT else "left"
+            self.status.emit(f"{done:,} row{'s' if done != 1 else ''} set to copy {way}"
+                             if done else f"None of these can be copied {way}")
+            return
         if not self.selected():
             self.status.emit("Select the files or folders to copy first")
             return
@@ -900,6 +1088,9 @@ class FolderView(QWidget):
 
     def _step(self, direction: int) -> None:
         """Alt+Down / Alt+Up: the next file that differs, opening folders."""
+        if self.layout_name == "list":
+            self._step_list(direction)
+            return
         order = [n for n in self.model.root.walk() if not n.is_dir and n.differs
                  and F.shown(n, self.model.show)] if self.model.root else []
         if not order:
@@ -909,6 +1100,37 @@ class FolderView(QWidget):
         target = order[(here + direction) % len(order)] if here >= 0 else (
             order[0] if direction > 0 else order[-1])
         self._select(target)
+
+    def _step_list(self, direction: int) -> None:
+        model = self.synclist.model
+        if model.root is None:
+            return
+        order = [n for n in model.root.walk() if n is not model.root and model.visible(n)
+                 and not (n.is_dir and n.status not in (F.ONLY_LEFT, F.ONLY_RIGHT))
+                 and L.category(n) != L.SAME]
+        if not order:
+            return
+        current = self.selected()
+        here = order.index(current[0]) if current and current[0] in order else -1
+        target = order[(here + direction) % len(order)] if here >= 0 else (
+            order[0] if direction > 0 else order[-1])
+        chain = []
+        up = target
+        while up is not None and up is not model.root:
+            chain.append(up)
+            up = up.parent
+        parent = QModelIndex()
+        index = QModelIndex()
+        for step in reversed(chain):
+            kids = model.kids(model.node(parent))
+            if step not in kids:
+                return
+            index = model.index(kids.index(step), 0, parent)
+            if step is not target:
+                self.synclist.tree.expand(index)
+            parent = index
+        self.synclist.tree.setCurrentIndex(index)
+        self.synclist.tree.scrollTo(index, QAbstractItemView.PositionAtCenter)
 
     def _select(self, node: F.Node) -> None:
         chain = []
@@ -966,6 +1188,14 @@ class FolderView(QWidget):
         files = [n for n in nodes if not n.is_dir]
         if files:
             menu.addAction("Compare in a new tab\tEnter", self._open)
+        if self.layout_name == "list":
+            # 1.20: the arrow for these rows, as clicking it would set it.
+            menu.addSeparator()
+            for label, action in (("Set to copy right\tAlt+Right", L.RIGHT),
+                                  ("Set to copy left\tAlt+Left", L.LEFT),
+                                  ("Leave alone\tSpace", L.SKIP)):
+                menu.addAction(label, lambda a=action: self.synclist.model.set_action(
+                    self.selected(), a))
         menu.addAction("Compare contents", self._contents_selected)
         # 1.15: Beyond Compare's "set as base folder": move one side, or both,
         # down into the folder under the cursor.
@@ -1000,7 +1230,8 @@ class FolderView(QWidget):
             menu.addAction("Copy right path",
                            lambda: QApplication.clipboard().setText(right))
         menu.aboutToHide.connect(menu.deleteLater)
-        menu.popup(self.tree.viewport().mapToGlobal(point))
+        view = self.synclist.tree if self.layout_name == "list" else self.tree
+        menu.popup(view.viewport().mapToGlobal(point))
 
     def _rebase(self, node: F.Node, left: str, right: str) -> None:
         if left and right:
@@ -1010,7 +1241,8 @@ class FolderView(QWidget):
         self.rebase.emit(left, right)
 
     def focus(self) -> None:
-        self.tree.setFocus(Qt.OtherFocusReason)
+        (self.synclist.tree if self.layout_name == "list" else self.tree).setFocus(
+            Qt.OtherFocusReason)
 
     # ------------------------------------------------- commands (1.17)
 
@@ -1019,10 +1251,27 @@ class FolderView(QWidget):
         one this view does not answer, which the tab then decides."""
         session = self.session
         ready = session.tree is not None
+        listed = self.layout_name == "list"
         if id_ in SHOW_COMMANDS:
+            if listed:
+                return State(enabled=False, visible=False)
             value = SHOW_COMMANDS[id_]
             return State(enabled=ready, checked=self.show == value,
                          count=self.totals.get(value) if ready else None)
+        if id_ in CATEGORY_COMMANDS:
+            if not listed:
+                return State(enabled=False, visible=False)
+            category = CATEGORY_COMMANDS[id_]
+            counts = self.synclist.model.counts() if ready else {}
+            return State(enabled=ready, checked=category in self.synclist.model.shown,
+                         count=counts.get(category) if ready else None)
+        if id_ == "folder-trees":
+            return State(checked=not listed)
+        if id_ == "folder-list":
+            return State(checked=listed)
+        if id_ == "run-list":
+            return State(enabled=listed and ready and not session.syncing,
+                         visible=listed)
         if id_ in ("copy-left", "copy-right", "copy-from-side"):
             return State(enabled=self.can_copy())
         if id_ in ("contents", "contents-all"):
@@ -1089,11 +1338,23 @@ class FolderView(QWidget):
             session.forget_sync()
             self.commandsChanged.emit()
         elif id_ == "expand":
-            self.expand_differences()
+            if self.layout_name == "list":
+                self.synclist.tree.expandAll()
+            else:
+                self.expand_differences()
         elif id_ == "expand-all":
-            self.tree.expandAll()
+            (self.synclist.tree if self.layout_name == "list" else self.tree).expandAll()
         elif id_ == "collapse":
-            self.collapse_all()
+            if self.layout_name == "list":
+                self.synclist.tree.collapseAll()
+            else:
+                self.collapse_all()
+        elif id_ in ("folder-trees", "folder-list"):
+            self.set_layout("list" if id_ == "folder-list" else "trees")
+        elif id_ in CATEGORY_COMMANDS:
+            self.set_category(CATEGORY_COMMANDS[id_])
+        elif id_ == "run-list":
+            self.run_list()
         elif id_ == "open-expanded":
             self.open_expanded = not self.open_expanded
             self.setting.emit("folders.open_expanded", self.open_expanded)
