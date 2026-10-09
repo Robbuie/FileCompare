@@ -102,7 +102,7 @@ class MainWindow(QMainWindow):
         #: 1.10: session files being read, by request id.
         self._session_files: dict[int, str] = {}
         self._loader.finished.connect(self._loaded)
-        self._tokens = sheet.tokens(**self._look)
+        self._tokens = sheet.tokens(**self._look, colours=self._colours())
         self._titlebar: TitleBar | None = None
         #: Set when a merge tab saved with nothing unresolved (git's answer).
         self.merge_ok = False
@@ -315,6 +315,10 @@ class MainWindow(QMainWindow):
             mode=mode,
             format="text" if mode == "text" else "auto",
             syntax="auto" if self._config.get("view.syntax") else "off",
+            show=str(self._config.get("view.show") or "all"),
+            context=int(self._config.get("view.context") or 3),
+            details=bool(self._config.get("view.details")),
+            file_history=self._file_history(),
         )
         if saved is not None:
             # 1.10: a session file's settings over the application's own.
@@ -337,8 +341,20 @@ class MainWindow(QMainWindow):
         tab.titleChanged.connect(lambda t=tab: self._retitle(t))
         tab.status.connect(lambda text, t=tab: self._tab_status(t, text))
         tab.setting.connect(self._config.set)
+        tab.pairChanged.connect(self._remember)
         session.start()
         return tab
+
+    def _file_history(self) -> tuple[str, ...]:
+        """Files compared lately, newest first, for a side's path box (1.18):
+        both sides of each recent pair."""
+        out: list[str] = []
+        for pair in self._config.get("recent") or []:
+            if isinstance(pair, list):
+                for path in pair:
+                    if isinstance(path, str) and path and path not in out:
+                        out.append(path)
+        return tuple(out[:20])
 
     def open_session(self, path: str) -> None:
         """A .fcsession file (1.10): read off the UI thread, then opened as
@@ -454,7 +470,8 @@ class MainWindow(QMainWindow):
     def apply_look(self, look: dict[str, str], source: str, *, save: bool = True) -> None:
         self._look = dict(look)
         self._look_source = source
-        self._tokens = sheet.apply(QApplication.instance(), **self._look)
+        self._tokens = sheet.apply(QApplication.instance(), **self._look,
+                                   colours=self._colours())
         if self._titlebar is not None:
             self._titlebar.apply_tokens(self._tokens)
         if self._frame is not None:
@@ -474,6 +491,14 @@ class MainWindow(QMainWindow):
         self._status_right.setText(
             f"{THEME_LABELS.get(self._tokens['theme_name'], '')}  ·  "
             f"{ACCENT_LABELS.get(self._tokens['accent_name'], '')}  ·  {where}")
+
+    def _colours(self) -> str:
+        value = self._config.get("view.colours")
+        return value if value in ("classic", "family") else "classic"
+
+    def _set_colours(self, value: str) -> None:
+        self._config.set("view.colours", value)
+        self.apply_look(self._look, self._look_source)
 
     def _choose(self, key: str, value: str) -> None:
         """A theme, accent or density picked from the menu. Choosing one is
@@ -532,10 +557,8 @@ class MainWindow(QMainWindow):
                 "updates-on-launch": bool(config.get("updates.check_on_launch")),
             }.get(id_)
             return State(checked=checked)
-        if id_ in (">recent", ">theme", ">accent", ">density"):
+        if id_ in (">recent", ">theme", ">accent", ">density", ">colours"):
             return State()
-        if id_ == ">colours":
-            return HIDDEN
         kind = self._kind()
         if id_ in ONLY and kind not in ONLY[id_]:
             return HIDDEN
@@ -591,6 +614,17 @@ class MainWindow(QMainWindow):
                 action.setCheckable(True)
                 action.setChecked(value == current)
                 action.triggered.connect(lambda _c=False, k=name, n=value: self._choose(k, n))
+                group.addAction(action)
+                menu.addAction(action)
+            return
+        if name == "colours":
+            group = QActionGroup(menu)
+            for value, label in (("classic", "Classic: every difference in red"),
+                                 ("family", "Family: changed amber, left red, right green")):
+                action = QAction(label, menu)
+                action.setCheckable(True)
+                action.setChecked(self._colours() == value)
+                action.triggered.connect(lambda _c=False, v=value: self._set_colours(v))
                 group.addAction(action)
                 menu.addAction(action)
             return

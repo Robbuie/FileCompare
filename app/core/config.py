@@ -47,6 +47,15 @@ DEFAULTS: dict[str, Any] = {
     "compare.intraline": "char",
     # 1.1: colour text by its language, found from the file's name.
     "view.syntax": True,
+    # 1.18: "classic" (every difference in one red, Beyond Compare's way) or
+    # "family" (amber changed, red left only, green right only).
+    "view.colours": "classic",
+    # 1.18: the text view's show filter -- "all", "diffs", "same" or
+    # "context" -- the lines of context kept around each difference, and
+    # whether the line details panel is open under the panes.
+    "view.show": "all",
+    "view.context": 3,
+    "view.details": True,
 
     # Seconds a side may take to load before it is shown as not answering.
     # Generous, because a large file on a slow share is not a dead one.

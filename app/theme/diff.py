@@ -48,14 +48,31 @@ STRENGTH: dict[str, tuple[float, float]] = {
 
 KINDS = tuple(HUES)
 
+#: 1.18: the palettes. "family" is the semantic set above; "classic" is
+#: Beyond Compare's way, chosen by the user as the default: every difference
+#: in one red, whichever side it is on, and a file on one side only of a
+#: folder compare in violet. Moved blocks and conflicts keep their own hue.
+PALETTES = ("classic", "family")
+CLASSIC_RED = (222, 60, 60)
 
-def build(tokens: dict[str, str]) -> dict[str, str]:
+
+def build(tokens: dict[str, str], palette: str = "classic") -> dict[str, str]:
     """The `diff_*` tokens for the theme `tokens` was built for."""
     theme = tokens.get("theme_name", "dark")
     row, mark = STRENGTH.get(theme, STRENGTH["dark"])
     surface = qss.unhex(tokens["bg_2"])
-    out: dict[str, str] = {}
-    for kind, hue in HUES.items():
+    classic = palette == "classic"
+    hues = dict(HUES)
+    if classic:
+        for kind in ("add", "del", "chg"):
+            hues[kind] = CLASSIC_RED
+    out: dict[str, str] = {"diff_palette": "classic" if classic else "family"}
+    dark = sum(surface) < 382
+    # The ink a classic difference is written in: the red, pulled toward
+    # the text colour of the theme so it reads as text and not as a wash.
+    ink_to = (255, 255, 255) if dark else (0, 0, 0)
+    out["diff_ink"] = qss.mix(CLASSIC_RED, ink_to, 0.78 if dark else 0.82)
+    for kind, hue in hues.items():
         out[f"diff_{kind}_bar"] = qss.rgb(hue)
         out[f"diff_{kind}_row"] = qss.mix(hue, surface, row)
         out[f"diff_{kind}_mark"] = qss.mix(hue, surface, mark)
@@ -72,4 +89,16 @@ def build(tokens: dict[str, str]) -> dict[str, str]:
     # asked for" colour, strong enough to read through a change wash.
     out["find_mark"] = qss.mix(qss.unhex(tokens["sel"]), surface, 0.42)
     out["diff_filler"] = qss.mix(qss.unhex(tokens["bg_0"]), surface, 0.55)
+    # Folder compare's roles (1.18): a side only on the left, only on the
+    # right, and a pair that differs. Family: red, green, amber. Classic:
+    # one side only is violet whichever side, a differing pair red.
+    roles = {"dir_left": "moved" if classic else "del",
+             "dir_right": "moved" if classic else "add",
+             "dir_newer": "chg"}
+    for role, kind in roles.items():
+        for part in ("bar", "row"):
+            out[f"{role}_{part}"] = out[f"diff_{kind}_{part}"]
+    # A merge's taken lines are green in either palette: there "added" is
+    # what was chosen, not a difference.
+    out["merge_taken_row"] = qss.mix(HUES["add"], surface, row)
     return out

@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.18.0 - show only the differences, line details, and a path box per file
+
+- **All, Diffs, Same, Context** on the toolbar and in the View menu. Diffs
+  shows only the lines that differ; Context keeps three lines round each
+  difference; Same shows only the lines that match. Each run of hidden lines
+  becomes one line saying how many ("85 identical lines"), and a click on it
+  shows them. Next and previous, copying, editing and find all work as
+  before; find, a pin or the map opens the run it lands in. The filter you
+  pick is kept for the next comparison.
+- **Line details** under the panes: the current line of each side, one over
+  the other in the same columns, with what changed marked, so two long
+  lines can be compared without looking across the gap. It scrolls itself
+  to the first difference on a line wider than it is. View > Line details
+  turns it off.
+- **A path box over each file**, as folder compare has had since 1.15: type
+  or paste another file and press Enter, pick a recent one from the arrow,
+  browse, or drop one on it. Only that side is read again. Under it, when
+  the file was written, its size, encoding, line endings and line count;
+  click that line for the side's save and encoding options. File > Open
+  left... and Open right... do the same from the menu.
+- **Classic colours, now the default**: every difference in one red, the
+  line written in red and the changed characters in bold, as Beyond Compare
+  does. In folder compare a file on one side only is violet, a pair that
+  differs red. View > Difference colours > Family brings back amber,
+  red and green. A merge's taken lines stay green either way.
+
 ## 1.17.0 - a menu bar and a labelled toolbar
 
 The first of five releases that rework the window along Beyond Compare's

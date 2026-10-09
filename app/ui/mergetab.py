@@ -299,7 +299,8 @@ class MergeTab(QWidget):
 
     def _wash_output(self) -> None:
         s = self.session
-        washes = {M.MINE: "diff_add_row", M.THEIRS: "diff_add_row", M.BOTH: "diff_add_row"}
+        washes = {M.MINE: "merge_taken_row", M.THEIRS: "merge_taken_row",
+                  M.BOTH: "merge_taken_row"}
         selections = []
         for index, (chunk, (start, stop)) in enumerate(zip(s.merge.chunks, self._spans)):
             if chunk.kind == M.EQUAL:

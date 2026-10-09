@@ -288,13 +288,13 @@ class FolderModel(QAbstractItemModel):
 
 def _ink(status: str) -> str:
     return {
-        F.ONLY_LEFT: "diff_del_bar",
-        F.ONLY_RIGHT: "diff_add_bar",
-        F.NEWER_LEFT: "diff_chg_bar",
-        F.NEWER_RIGHT: "diff_chg_bar",
-        F.DIFFERENT: "diff_chg_bar",
-        F.CONTENT_DIFF: "diff_chg_bar",
-        F.CLASH: "diff_del_bar",
+        F.ONLY_LEFT: "dir_left_bar",
+        F.ONLY_RIGHT: "dir_right_bar",
+        F.NEWER_LEFT: "dir_newer_bar",
+        F.NEWER_RIGHT: "dir_newer_bar",
+        F.DIFFERENT: "dir_newer_bar",
+        F.CONTENT_DIFF: "dir_newer_bar",
+        F.CLASH: "dir_newer_bar",
         F.ERROR: "warn",
         F.CONTENT_SAME: "txt_2",
         F.HOUR_APART: "txt_2",
@@ -303,13 +303,13 @@ def _ink(status: str) -> str:
 
 def _wash(status: str) -> str:
     return {
-        F.ONLY_LEFT: "diff_del_row",
-        F.ONLY_RIGHT: "diff_add_row",
-        F.NEWER_LEFT: "diff_chg_row",
-        F.NEWER_RIGHT: "diff_chg_row",
-        F.DIFFERENT: "diff_chg_row",
-        F.CONTENT_DIFF: "diff_chg_row",
-        F.CLASH: "diff_del_row",
+        F.ONLY_LEFT: "dir_left_row",
+        F.ONLY_RIGHT: "dir_right_row",
+        F.NEWER_LEFT: "dir_newer_row",
+        F.NEWER_RIGHT: "dir_newer_row",
+        F.DIFFERENT: "dir_newer_row",
+        F.CONTENT_DIFF: "dir_newer_row",
+        F.CLASH: "dir_newer_row",
     }.get(status, "")
 
 

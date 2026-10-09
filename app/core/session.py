@@ -172,6 +172,13 @@ class Options:
     mode: str = "auto"
     #: 1.1: syntax colour -- "auto" by the file's name, or "off".
     syntax: str = "auto"
+    #: 1.18: the text view's show filter, its context lines, whether the
+    #: line details panel is open, and files compared lately for the path
+    #: boxes, newest first.
+    show: str = "all"
+    context: int = 3
+    details: bool = True
+    file_history: tuple[str, ...] = ()
 
 
 class Session(QObject):
@@ -281,6 +288,32 @@ class Session(QObject):
     def reload(self) -> None:
         """Read both sides from disk again and compare (Ctrl+R)."""
         self.start()
+
+    def set_path(self, index: int, path: str) -> bool:
+        """Another file on one side (1.18, the side's path box); the other
+        side keeps what it read. Its edits, if any, are the tab's to ask
+        about first. False when nothing changes."""
+        side = self.sides[index]
+        if not path or path == side.path:
+            return False
+        side.path = path
+        side.title = ""
+        side.read_as = ""
+        side.stale = False
+        side.save_error = ""
+        # Pins name lines of the text that is being replaced.
+        self.pins = []
+        left, right = (s.path for s in self.sides)
+        markers = comment_markers(left) or comment_markers(right)
+        self.options = replace(self.options,
+                               rules=replace(self.options.rules, markers=markers))
+        if self.options.format != "text":
+            kind = formats.detect(left, right)
+            if kind != self.format_kind:
+                self.format_kind = kind
+                self.structure = self.options.structure and kind in formats.DEFAULT_ON
+        self._open(index)
+        return True
 
     def set_rules(self, rules: Rules) -> None:
         rules = replace(rules, markers=self.options.rules.markers)

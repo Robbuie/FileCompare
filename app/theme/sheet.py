@@ -420,6 +420,7 @@ def tokens(
     theme: str | None = None,
     accent: str | None = None,
     density: str | None = None,
+    colours: str = "classic",
 ) -> dict[str, str]:
     """Every token for one combination, the difference colours included.
 
@@ -430,7 +431,7 @@ def tokens(
     # 1.17: the word under a toolbar icon, a step under the interface size.
     ui = float(str(values.get("ui_font", "13px")).rstrip("px") or 13)
     values["tool_font"] = f"{max(9.0, ui - 1.5):g}px"
-    values.update(diff.build(values))
+    values.update(diff.build(values, colours))
     values.update(syntax.build(values))
     return values
 
@@ -445,6 +446,7 @@ def apply(
     theme: str | None = None,
     accent: str | None = None,
     density: str | None = None,
+    colours: str = "classic",
 ) -> dict[str, str]:
     """Render the sheet for one combination and put it on the application.
 
@@ -454,7 +456,7 @@ def apply(
     """
     from PySide6.QtGui import QColor, QFont, QPalette
 
-    values = tokens(theme, accent, density)
+    values = tokens(theme, accent, density, colours)
     # Qt's stylesheet keeps only the first family of a `font-family` list, so
     # `{mono}` is in effect "Cascadia Mono" alone, and a machine without it
     # (Windows 10 before Terminal) got a proportional face in every mono

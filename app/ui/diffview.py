@@ -24,6 +24,7 @@ instead would be correct and would cost a font measurement per mark per paint.
 from __future__ import annotations
 
 import re
+from array import array
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
@@ -81,6 +82,112 @@ class ViewState:
     #: line picked first -- while the other line is being chosen.
     pinned: set = field(default_factory=set)
     pending: tuple | None = None
+    #: 1.18: the show filter -- "all", "diffs", "same" or "context" -- and
+    #: what it makes of the rows. Everything above is in row space, as the
+    #: session is; `first` and painting are in display space, which is the
+    #: rows with each run the filter hides folded into one line. `order` is
+    #: None when nothing is hidden (the usual case, and the cheap one), else
+    #: one entry per display line: a row, or `~fold` for `folds[fold]`.
+    show: str = "all"
+    context: int = 3
+    order: array | None = None
+    where: array | None = None
+    folds: list = field(default_factory=list)
+    #: Folds opened by a click, as `(first row, stop row)`, kept while the
+    #: filter stays the same so a rebuild after an edit does not close them.
+    opened: set = field(default_factory=set)
+
+    # ------------------------------------------------ display space (1.18)
+
+    def count(self) -> int:
+        """Display lines: rows, with each hidden run folded to one."""
+        return len(self.rows) if self.order is None else len(self.order)
+
+    def row_of(self, line: int) -> int | None:
+        """The row on display line `line`; None for a fold or past the end."""
+        if self.order is None:
+            return line if 0 <= line < len(self.rows) else None
+        if not 0 <= line < len(self.order):
+            return None
+        value = self.order[line]
+        return value if value >= 0 else None
+
+    def fold_of(self, line: int) -> tuple[int, int] | None:
+        """The rows hidden behind display line `line`, if it is a fold."""
+        if self.order is None or not 0 <= line < len(self.order):
+            return None
+        value = self.order[line]
+        return self.folds[~value] if value < 0 else None
+
+    def display_of(self, row: int) -> int:
+        """The display line a row is on, or the fold that hides it."""
+        if self.order is None or not self.rows:
+            return row
+        row = max(0, min(row, len(self.rows) - 1))
+        return self.where[row]
+
+    def hidden(self, row: int) -> bool:
+        return self.order is not None and self.row_of(self.display_of(row)) != row
+
+    def row_near(self, line: int) -> int:
+        """A row for any display line: a fold's first row, or the last row
+        past the end. For clicks and drags, which always land somewhere."""
+        row = self.row_of(line)
+        if row is not None:
+            return row
+        fold = self.fold_of(line)
+        if fold is not None:
+            return fold[0]
+        return max(0, len(self.rows) - 1) if line >= 0 else 0
+
+    def rebuild_order(self) -> None:
+        """Work out the display lines for the rows and the filter."""
+        rows = self.rows
+        n = len(rows)
+        self.folds = []
+        if self.show == "all" or not n:
+            self.order = self.where = None
+            return
+        keep = bytearray(n)
+        if self.show == "diffs":
+            for r, row in enumerate(rows):
+                if row[2] != align.EQUAL:
+                    keep[r] = 1
+        elif self.show == "same":
+            for r, row in enumerate(rows):
+                if row[2] == align.EQUAL:
+                    keep[r] = 1
+        else:                       # context
+            c = max(0, self.context)
+            for block in self.blocks:
+                lo, hi = max(0, block.start - c), min(n, block.end + c)
+                keep[lo:hi] = b"\x01" * (hi - lo)
+        for lo, hi in self.opened:
+            lo, hi = max(0, lo), min(n, hi)
+            if lo < hi:
+                keep[lo:hi] = b"\x01" * (hi - lo)
+        order = array("i")
+        where = array("i", bytes(4 * n))
+        r = 0
+        while r < n:
+            if keep[r]:
+                where[r] = len(order)
+                order.append(r)
+                r += 1
+                continue
+            stop = keep.find(1, r)
+            stop = n if stop < 0 else stop
+            if stop - r == 1 and self.show == "context":
+                # One line hidden would cost the same line as its fold.
+                where[r] = len(order)
+                order.append(r)
+            else:
+                line = len(order)
+                self.folds.append((r, stop))
+                order.append(~(len(self.folds) - 1))
+                where[r:stop] = array("i", [line]) * (stop - r)
+            r = stop
+        self.order, self.where = order, where
 
     def syntax_spans(self, side: int, index: int):
         held = self.syntax[side]
@@ -166,6 +273,8 @@ class _Painted(QWidget):
     doubleClicked = Signal(int)
     #: 1.13: (row, global position) of a right-click.
     menuAt = Signal(int, object)
+    #: 1.18: a fold was clicked: (first row, stop row) of the lines it hides.
+    foldClicked = Signal(int, int)
 
     def __init__(self, state: ViewState, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -219,11 +328,20 @@ class _Painted(QWidget):
             self.wheeled.emit(int(-steps * WHEEL_ROWS) or (-1 if steps > 0 else 1))
         event.accept()
 
-    def row_at(self, y: float) -> int:
+    def line_at(self, y: float) -> int:
+        """The display line under `y` (1.18: not a row once lines fold)."""
         return self.state.first + int(y // max(1, self.row_h))
+
+    def row_at(self, y: float) -> int:
+        return self.state.row_near(self.line_at(y))
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
+            fold = self.state.fold_of(self.line_at(event.position().y()))
+            if fold is not None:
+                self.foldClicked.emit(*fold)
+                event.accept()
+                return
             row = self.row_at(event.position().y())
             self.pressed.emit(row, bool(event.modifiers() & Qt.ShiftModifier))
             self.clicked.emit(row)
@@ -240,6 +358,8 @@ class _Painted(QWidget):
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
+            if self.state.fold_of(self.line_at(event.position().y())) is not None:
+                return
             self.doubleClicked.emit(self.row_at(event.position().y()))
 
 
@@ -306,9 +426,17 @@ class TextPane(_Painted):
         found = self.colour("find_mark")
 
         painter.setFont(self.mono)
-        end = min(len(s.rows), s.first + self.visible_rows() + 1)
-        for row in range(s.first, end):
-            y = (row - s.first) * self.row_h
+        classic = self.tokens.get("diff_palette") == "classic"
+        diff_ink = self.colour("diff_ink")
+        bold = QFont(self.mono)
+        bold.setBold(True)
+        end = min(s.count(), s.first + self.visible_rows() + 1)
+        for line in range(s.first, end):
+            y = (line - s.first) * self.row_h
+            row = s.row_of(line)
+            if row is None:
+                self._paint_fold(painter, y, s.fold_of(line), numbers, text_x)
+                continue
             index = s.rows[row][side]
             if index == align.NONE and selected_lo <= row < selected_hi:
                 painter.fillRect(QRectF(0, y, self.width(), self.row_h), filler)
@@ -368,7 +496,26 @@ class TextPane(_Painted):
             if text:
                 painter.setClipRect(text_band)
                 spans = s.syntax_spans(side, index)
-                if not spans:
+                differs = classic and kind not in (align.EQUAL, align.IGNORED)
+                if differs:
+                    # 1.18, Classic: a line that differs is written in the
+                    # difference's ink, its changed characters in bold, as
+                    # Beyond Compare does; syntax colour gives way to it.
+                    painter.setPen(diff_ink)
+                    painter.drawText(QRectF(text_x - offset, y, self.width(), self.row_h),
+                                     Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip, text)
+                    if kind in mark_colours:
+                        painter.setFont(bold)
+                        for start, stop in s.spans(row)[side]:
+                            a, b = max(start, first_col), min(stop, first_col + cols)
+                            if a < b:
+                                painter.drawText(
+                                    QRectF(text_x - offset + (a - first_col) * self.char_w, y,
+                                           (b - a + 1) * self.char_w, self.row_h),
+                                    Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip,
+                                    text[a - first_col:b - first_col])
+                        painter.setFont(self.mono)
+                elif not spans:
                     painter.setPen(ink)
                     painter.drawText(QRectF(text_x - offset, y, self.width(), self.row_h),
                                      Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip, text)
@@ -413,13 +560,39 @@ class TextPane(_Painted):
         if pos < end:
             draw(pos, end, colours[0])
 
+    def _paint_fold(self, painter: QPainter, y: float, fold, numbers: float,
+                    text_x: float) -> None:
+        """A run of lines the show filter hides (1.18): one line saying how
+        many, which a click opens."""
+        band = QRectF(0, y, self.width(), self.row_h)
+        painter.fillRect(band, self.colour("bg_1"))
+        pen = QPen(self.colour("line"), 1, Qt.DashLine)
+        painter.setPen(pen)
+        painter.drawLine(QPointF(0, y + 0.5), QPointF(self.width(), y + 0.5))
+        painter.drawLine(QPointF(0, y + self.row_h - 0.5), QPointF(self.width(), y + self.row_h - 0.5))
+        if fold is None:
+            return
+        count = fold[1] - fold[0]
+        what = "differing" if self.state.show == "same" else "identical"
+        painter.setPen(self.colour("txt_2"))
+        painter.setFont(self.ui_font())
+        painter.drawText(QRectF(text_x, y, self.width() - text_x, self.row_h),
+                         Qt.AlignLeft | Qt.AlignVCenter,
+                         f"\u22ef  {count:,} {what} line{'s' if count != 1 else ''}  (click to show)")
+        painter.setFont(self.mono)
+
+    def ui_font(self) -> QFont:
+        font = QFont()
+        font.setPixelSize(max(9, int(self.mono.pixelSize()) - 1))
+        return font
+
     def _paint_current(self, painter: QPainter) -> None:
         s = self.state
         if s.current is None or s.current >= len(s.blocks):
             return
         block = s.blocks[s.current]
-        top = (block.start - s.first) * self.row_h
-        bottom = (block.end - s.first) * self.row_h
+        top = (s.display_of(block.start) - s.first) * self.row_h
+        bottom = (s.display_of(block.end - 1) + 1 - s.first) * self.row_h
         if bottom < 0 or top > self.height():
             return
         pen = QPen(self.colour("accent_line"), 1)
@@ -468,7 +641,8 @@ class Gutter(_Painted):
 
     def _selection_arrow_at(self, x: float, y: float) -> tuple[int, int, int] | None:
         picked = self.state.copyable()
-        if picked is None or self.row_at(y) != picked[0]:
+        if picked is None or self.state.fold_of(self.line_at(y)) is not None \
+                or self.row_at(y) != picked[0]:
             return None
         to_side = 0 if x < self.width() / 2 else 1
         if self.state.editable[to_side]:
@@ -476,6 +650,8 @@ class Gutter(_Painted):
         return None
 
     def _arrow_at(self, x: float, y: float) -> tuple[int, int] | None:
+        if self.state.fold_of(self.line_at(y)) is not None:
+            return None
         row = self.row_at(y)
         picked = self.state.copyable()
         if picked is not None and row == picked[0]:
@@ -521,14 +697,25 @@ class Gutter(_Painted):
         s = self.state
         painter = QPainter(self)
         painter.fillRect(self.rect(), self.colour("bg_1"))
-        end = min(len(s.rows), s.first + self.visible_rows() + 1)
+        end = min(s.count(), s.first + self.visible_rows() + 1)
         mid = self.width() / 2
         picked = s.copyable()
+        h = self.row_h
+        for line in range(s.first, end):
+            # 1.18: a fold is drawn across the gutter too, so it reads as one
+            # line from side to side.
+            if s.row_of(line) is None:
+                painter.fillRect(QRectF(0, (line - s.first) * h, self.width(), h),
+                                 self.colour("bg_0"))
         for block_index, block in enumerate(s.blocks):
-            if block.end <= s.first or block.start >= end:
+            top_line = s.display_of(block.start)
+            stop_line = s.display_of(block.end - 1) + 1
+            if stop_line <= s.first or top_line >= end:
                 continue
-            top = (max(block.start, s.first) - s.first) * self.row_h
-            bottom = (min(block.end, end) - s.first) * self.row_h
+            if s.row_of(top_line) != block.start:
+                continue                  # hidden by the filter (Same)
+            top = (max(top_line, s.first) - s.first) * h
+            bottom = (min(stop_line, end) - s.first) * h
             colour = self.colour(_block_bar(block))
             current = block_index == s.current
             width = 6 if current else 4
@@ -538,16 +725,17 @@ class Gutter(_Painted):
                 painter.setPen(QPen(self.colour("accent"), 1.5))
                 painter.drawLine(2, int(top), 2, int(bottom))
                 painter.drawLine(self.width() - 3, int(top), self.width() - 3, int(bottom))
-            if block.significant and s.first <= block.start < end:
+            if block.significant and s.first <= top_line < end:
                 if picked is None or block.start != picked[0]:
-                    self._arrows(painter, top, current)
+                    self._arrows(painter, (top_line - s.first) * h, current)
         if picked is not None:
             # The selection's own bracket and arrows, in the accent: these are
             # the rows the arrows will copy, whichever differences they cut.
-            lo, hi = max(picked[0], s.first), min(picked[1], end)
-            if lo < hi:
-                top = (lo - s.first) * self.row_h
-                bottom = (hi - s.first) * self.row_h
+            lo_line = max(s.display_of(picked[0]), s.first)
+            hi_line = min(s.display_of(picked[1] - 1) + 1, end)
+            if lo_line < hi_line:
+                top = (lo_line - s.first) * h
+                bottom = (hi_line - s.first) * h
                 wash = QColor(self.colour("accent"))
                 wash.setAlphaF(0.16)
                 painter.fillRect(QRectF(1, top, self.width() - 2, bottom - top), wash)
@@ -555,16 +743,18 @@ class Gutter(_Painted):
                 painter.drawLine(QPointF(2, top + 1), QPointF(2, bottom - 1))
                 painter.drawLine(QPointF(self.width() - 3, top + 1),
                                  QPointF(self.width() - 3, bottom - 1))
-            if s.first <= picked[0] < end:
-                self._arrows(painter, (picked[0] - s.first) * self.row_h, True,
+            first_line = s.display_of(picked[0])
+            if s.first <= first_line < end:
+                self._arrows(painter, (first_line - s.first) * h, True,
                              colour=self.colour("accent"))
         if s.pinned:
             # A pin is a bar straight across, in the accent: these two lines
             # are opposite each other because somebody said so.
             pen = QPen(self.colour("accent"), 2)
             for row in s.pinned:
-                if s.first <= row < end:
-                    y = (row - s.first) * self.row_h + self.row_h / 2
+                line = s.display_of(row)
+                if s.first <= line < end and s.row_of(line) == row:
+                    y = (line - s.first) * h + h / 2
                     painter.setPen(pen)
                     painter.drawLine(QPointF(1, y), QPointF(self.width() - 1, y))
         painter.setPen(QPen(self.colour("line_soft"), 1))
@@ -632,8 +822,16 @@ class DiffMap(QWidget):
                 painter.fillRect(QRectF(4 + column, y0, column, box_h), colour)
         # The view.
         if s.rows:
-            v0 = 2 + s.first / total * height
-            v1 = 2 + min(total, s.first + self.visible) / total * height
+            # The view, in rows: with lines folded (1.18) a screenful can
+            # cover far more of the file than it has lines.
+            top_row = s.row_near(s.first)
+            last = min(s.count(), s.first + self.visible) - 1
+            bottom_row = s.row_near(last) + 1
+            fold = s.fold_of(last)
+            if fold is not None:
+                bottom_row = fold[1]
+            v0 = 2 + top_row / total * height
+            v1 = 2 + min(total, bottom_row) / total * height
             frame = parse_colour(self.tokens.get("txt_1"))
             fill = QColor(frame)
             fill.setAlphaF(0.12)
@@ -667,6 +865,95 @@ class DiffMap(QWidget):
         if steps:
             self.wheeled.emit(int(-steps * WHEEL_ROWS) or (-1 if steps > 0 else 1))
         event.accept()
+
+
+class LineDetails(_Painted):
+    """The current line of each side, one over the other (1.18).
+
+    Beyond Compare's line details and WinMerge's diff pane: comparing two
+    long lines across the gap between the panes means hunting for where they
+    part, and stacked in the same columns the difference is directly under
+    the eye. It follows the cursor, shows the lines as the panes do (tabs
+    expanded, the same marks), and scrolls itself sideways to the first
+    difference when the line is wider than it is.
+    """
+
+    def __init__(self, state: ViewState, parent: QWidget | None = None) -> None:
+        super().__init__(state, parent)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def apply_tokens(self, tokens: dict[str, str], font: QFont) -> None:
+        super().apply_tokens(tokens, font)
+        self.setFixedHeight(int(self.row_h * 2 + 10))
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        s = self.state
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), self.colour("bg_2"))
+        painter.setPen(QPen(self.colour("line"), 1))
+        painter.drawLine(0, 0, self.width(), 0)
+        if not s.rows:
+            painter.end()
+            return
+        row = max(0, min(s.cursor, len(s.rows) - 1))
+        left, right, kind = s.rows[row]
+        label_w = self.char_w * 11
+        text_x = label_w + 8
+        cols = max(1, int((self.width() - text_x - 8) // max(1.0, self.char_w)))
+        spans = s.spans(row) if kind in (align.CHANGED, align.IGNORED) else ([], [])
+        texts = (s.display(0, left), s.display(1, right))
+        # Start where the first difference can be seen, keeping some of what
+        # comes before it for context.
+        first_diff = min([a for side in spans for a, _b in side] or [0])
+        start = max(0, first_diff - cols // 3) if first_diff >= cols - 4 else 0
+        classic = self.tokens.get("diff_palette") == "classic"
+        mark = self.colour("diff_ignored_mark" if kind == align.IGNORED else "diff_chg_mark")
+        ink, muted = self.colour("txt_0"), self.colour("txt_2")
+        diff_ink = self.colour("diff_ink")
+        bold = QFont(self.mono)
+        bold.setBold(True)
+        for side in (0, 1):
+            y = 5 + side * self.row_h
+            index = (left, right)[side]
+            name = ("LEFT", "RIGHT")[side]
+            number = f"{index + 1:,}" if index != align.NONE else "-"
+            painter.setFont(self.ui_font())
+            painter.setPen(muted)
+            painter.drawText(QRectF(8, y, label_w - 8, self.row_h), Qt.AlignLeft | Qt.AlignVCenter,
+                             f"{name}  {number}")
+            painter.setFont(self.mono)
+            if index == align.NONE:
+                painter.setPen(muted)
+                painter.drawText(QRectF(text_x, y, self.width() - text_x, self.row_h),
+                                 Qt.AlignLeft | Qt.AlignVCenter, "(no line on this side)")
+                continue
+            text = texts[side][start:start + cols]
+            for a, b in spans[side]:
+                a, b = max(a, start), min(b, start + cols)
+                if a < b:
+                    painter.fillRect(QRectF(text_x + (a - start) * self.char_w, y + 1,
+                                            (b - a) * self.char_w, self.row_h - 2), mark)
+            differs = kind not in (align.EQUAL, align.IGNORED)
+            painter.setPen(diff_ink if classic and differs else ink)
+            painter.drawText(QRectF(text_x, y, self.width(), self.row_h),
+                             Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip, text)
+            if classic and differs:
+                painter.setFont(bold)
+                for a, b in spans[side]:
+                    a, b = max(a, start), min(b, start + cols)
+                    if a < b:
+                        painter.drawText(QRectF(text_x + (a - start) * self.char_w, y,
+                                                (b - a + 1) * self.char_w, self.row_h),
+                                         Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip,
+                                         texts[side][a:b])
+                painter.setFont(self.mono)
+        painter.end()
+
+    def ui_font(self) -> QFont:
+        font = QFont()
+        font.setPixelSize(max(9, int(self.mono.pixelSize()) - 2))
+        font.setBold(True)
+        return font
 
 
 class LineEditor(QPlainTextEdit):
@@ -760,6 +1047,7 @@ class DiffView(QWidget):
         self.right = TextPane(self.state, 1)
         self.gutter = Gutter(self.state)
         self.map = DiffMap(self.state)
+        self.details = LineDetails(self.state)
         self.hbar = QScrollBar(Qt.Horizontal)
         self.hbar.setFocusPolicy(Qt.NoFocus)
         self.hbar.valueChanged.connect(self._set_x)
@@ -780,10 +1068,12 @@ class DiffView(QWidget):
         outer.setSpacing(0)
         outer.addLayout(body, 1)
         outer.addWidget(self.hbar)
+        outer.addWidget(self.details)
 
         for pane in (self.left, self.right, self.gutter):
             pane.wheeled.connect(self.scroll_by)
             pane.clicked.connect(self._clicked)
+            pane.foldClicked.connect(self.open_fold)
         for side, pane in enumerate((self.left, self.right)):
             pane.pressed.connect(lambda row, extend, sd=side: self._press(sd, row, extend))
             pane.dragged.connect(lambda row, sd=side: self._press(sd, row, True))
@@ -805,7 +1095,7 @@ class DiffView(QWidget):
     def apply_tokens(self, tokens: dict[str, str]) -> None:
         font = mono_font(tokens)
         self._font = font
-        for widget in (self.left, self.right, self.gutter):
+        for widget in (self.left, self.right, self.gutter, self.details):
             widget.apply_tokens(tokens, font)
         self.map.apply_tokens(tokens)
         self._layout_changed()
@@ -830,6 +1120,9 @@ class DiffView(QWidget):
         self.state.marks = {}
         self.state.current = None
         self.state.first = 0
+        if not had:
+            self.state.opened = set()
+        self.state.rebuild_order()
         last = max(0, len(comparison.rows) - 1)
         self.state.cursor = min(self.state.cursor, last)
         self.state.anchor = min(self.state.anchor, last)
@@ -866,10 +1159,56 @@ class DiffView(QWidget):
         self.state.marks = {}
         self.update_all()
 
+    # ---------------------------------------------------- show filter (1.18)
+
+    SHOWS = ("all", "diffs", "same", "context")
+
+    def set_show(self, show: str, context: int | None = None) -> None:
+        """All lines, only the differences, only the matching lines, or the
+        differences with `context` lines round each. The cursor's row stays
+        in view; a fold opened by hand closes when the filter changes."""
+        s = self.state
+        show = show if show in self.SHOWS else "all"
+        if context is not None:
+            s.context = max(0, int(context))
+        if show == s.show and context is None:
+            return
+        keep = s.row_near(s.first)
+        s.show = show
+        s.opened = set()
+        s.rebuild_order()
+        self._layout_changed()
+        target = s.cursor if s.rows and not s.hidden(s.cursor) else keep
+        self.scroll_to(s.display_of(target) - int(self.left.visible_rows() * LANDING))
+        self.update_all()
+        self.currentChanged.emit()
+
+    def open_fold(self, first: int, stop: int) -> None:
+        """Show the lines behind a fold, where it is."""
+        s = self.state
+        s.opened.add((first, stop))
+        line = s.display_of(first)
+        offset = line - s.first
+        s.rebuild_order()
+        self._layout_changed()
+        self.scroll_to(s.display_of(first) - offset)
+        self.update_all()
+
+    def _expose(self, row: int) -> None:
+        """Open the fold hiding `row`, for a jump to a line the filter hides
+        (find, a pin, the map)."""
+        s = self.state
+        if s.hidden(row):
+            fold = s.fold_of(s.display_of(row))
+            if fold is not None:
+                s.opened.add(fold)
+                s.rebuild_order()
+                self._layout_changed()
+
     # --------------------------------------------------------------- moving
 
     def _max_first(self) -> int:
-        return max(0, len(self.state.rows) - self.left.visible_rows() + 1)
+        return max(0, self.state.count() - self.left.visible_rows() + 1)
 
     def scroll_to(self, first: int) -> None:
         first = max(0, min(first, self._max_first()))
@@ -884,7 +1223,7 @@ class DiffView(QWidget):
 
     def _centre_on(self, fraction: float) -> None:
         row = int(fraction * len(self.state.rows))
-        self.scroll_to(row - self.left.visible_rows() // 2)
+        self.scroll_to(self.state.display_of(row) - self.left.visible_rows() // 2)
 
     def _set_x(self, value: int) -> None:
         self.state.x = int(value * self.left.char_w)
@@ -896,10 +1235,13 @@ class DiffView(QWidget):
             return
         self.state.current = block_index
         block = self.state.blocks[block_index]
+        self._expose(block.start)
         self.state.cursor = self.state.anchor = block.start
         visible = self.left.visible_rows()
-        if block.start < self.state.first or block.end > self.state.first + visible:
-            self.scroll_to(block.start - int(visible * LANDING))
+        start = self.state.display_of(block.start)
+        stop = self.state.display_of(block.end - 1) + 1
+        if start < self.state.first or stop > self.state.first + visible:
+            self.scroll_to(start - int(visible * LANDING))
         self.update_all()
         self.currentChanged.emit()
 
@@ -949,9 +1291,10 @@ class DiffView(QWidget):
         s = self.state
         if s.current is not None:
             block = s.blocks[s.current]
-            if s.first <= block.start < s.first + self.left.visible_rows():
+            if s.first <= s.display_of(block.start) < s.first + self.left.visible_rows():
                 return block.start
-        return s.first if previous else s.first - 1
+        top = s.row_near(s.first)
+        return top if previous else top - 1
 
     def _clicked(self, row: int) -> None:
         index = None
@@ -1007,7 +1350,22 @@ class DiffView(QWidget):
         s = self.state
         if not s.rows:
             return
-        s.cursor = max(0, min(len(s.rows) - 1, s.cursor + rows))
+        if s.order is None:
+            s.cursor = max(0, min(len(s.rows) - 1, s.cursor + rows))
+        else:
+            # Lines, not rows: a fold is stepped over in the direction of
+            # travel, so the cursor never lands on a hidden row.
+            line = max(0, min(s.count() - 1, s.display_of(s.cursor) + rows))
+            step = 1 if rows > 0 else -1
+            while s.row_of(line) is None and 0 <= line + step < s.count():
+                line += step
+            if s.row_of(line) is None:
+                line -= step
+                while s.row_of(line) is None and 0 <= line - step < s.count():
+                    line -= step
+            row = s.row_of(line)
+            if row is not None:
+                s.cursor = row
         if not extend:
             s.anchor = s.cursor
         self.reveal(s.cursor)
@@ -1018,6 +1376,7 @@ class DiffView(QWidget):
         self.update_all()
 
     def select_rows(self, side: int, first: int, stop: int) -> None:
+        self._expose(first)
         self.state.side = side
         self.state.anchor = first
         self.state.cursor = max(first, stop - 1)
@@ -1027,10 +1386,11 @@ class DiffView(QWidget):
 
     def reveal(self, row: int) -> None:
         visible = self.left.visible_rows()
-        if row < self.state.first:
-            self.scroll_to(row)
-        elif row >= self.state.first + visible - 1:
-            self.scroll_to(row - visible + 2)
+        line = self.state.display_of(row)
+        if line < self.state.first:
+            self.scroll_to(line)
+        elif line >= self.state.first + visible - 1:
+            self.scroll_to(line - visible + 2)
 
     def selected_lines(self, side: int | None = None) -> tuple[int, list[int]]:
         """The focused side and the line numbers in the selection."""
@@ -1056,8 +1416,9 @@ class DiffView(QWidget):
         pane = self.left if side == 0 else self.right
         numbers = pane.number_width()
         self.reveal(lo)
-        top = pane.y() + (lo - s.first) * pane.row_h
-        height = (max(1, hi - lo) + 1) * pane.row_h + 6
+        top = pane.y() + (s.display_of(lo) - s.first) * pane.row_h
+        lines = s.display_of(max(lo, hi - 1)) - s.display_of(lo) + 1
+        height = (max(1, lines) + 1) * pane.row_h + 6
         height = min(height, pane.height() - max(0, top - pane.y()))
         self.editor.setGeometry(int(pane.x() + numbers), int(top),
                                 int(pane.width() - numbers), int(max(height, pane.row_h * 2)))
@@ -1097,8 +1458,12 @@ class DiffView(QWidget):
         self.update_all()
 
     def update_all(self) -> None:
-        for widget in (self.left, self.right, self.gutter, self.map):
+        for widget in (self.left, self.right, self.gutter, self.map, self.details):
             widget.update()
+
+    def set_details(self, on: bool) -> None:
+        """The line details panel under the panes, shown or not (1.18)."""
+        self.details.setVisible(on)
 
     # ----------------------------------------------------------------- keys
 

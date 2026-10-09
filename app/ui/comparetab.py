@@ -102,17 +102,19 @@ SAVE_ENCODINGS = (
 
 
 class SideHead(QWidget):
-    """The strip over one side: name, folder, what was detected, and trouble.
+    """The strip over one side: its path box, what was read, and trouble.
 
-    Over a folder compare (1.15) it is that side's path box instead, as in
-    Beyond Compare: type or paste a folder and press Enter, go up a level,
-    pick a parent or a recent folder, browse, or drop a folder on it. Only
-    that side changes; the other stays as it is and is not read again.
+    A path box as in Beyond Compare (folder compare since 1.15, files since
+    1.18): type or paste a path and press Enter, pick a recent one, browse,
+    or drop one on it. Only that side changes; the other stays as it is and
+    is not read again. Under a file's path, a line of what was read -- when
+    it was written, its size, encoding, line endings and lines -- which opens
+    the side's menu (save, read as, encodings).
     """
 
     retry = Signal()
     menuRequested = Signal()
-    #: 1.15, folder compare: the folder this side should show now.
+    #: The path this side should show now (a folder since 1.15, a file 1.18).
     pathChosen = Signal(str)
     browseRequested = Signal()
 
@@ -120,15 +122,16 @@ class SideHead(QWidget):
         super().__init__(parent)
         self.setProperty("role", "sidehead")
         self.setAttribute(Qt.WA_StyledBackground, True)
+        #: A title given on the command line (`--left-title`), shown before
+        #: the path when there is one.
         self.name = QLabel()
         self.name.setProperty("role", "sidename")
-        self.where = QLabel()
-        self.where.setProperty("role", "sidewhere")
-        self.where.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.name.hide()
         self.facts = QToolButton()
         self.facts.setProperty("role", "sidefacts")
         self.facts.setFocusPolicy(Qt.NoFocus)
-        self.facts.setToolTip("Encoding, line endings and saving for this side")
+        self.facts.setToolTip("When it was written, its size, encoding and line endings. "
+                              "Click for saving and reading options for this side.")
         self.facts.clicked.connect(lambda _c=False: self.menuRequested.emit())
         self.state = QLabel()
         self.state.setProperty("role", "sidestate")
@@ -139,51 +142,25 @@ class SideHead(QWidget):
         self.again.clicked.connect(self.retry)
         self.again.hide()
 
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        top.setSpacing(8)
-        top.addWidget(self.name)
-        top.addWidget(self.where, 1)
-        top.addWidget(self.state)
-        top.addWidget(self.again)
-        top.addWidget(self.facts)
-        box = QVBoxLayout(self)
-        box.setContentsMargins(12, 7, 12, 7)
-        box.addLayout(top)
-        self._top = top
-        self.folder_mode = False
-        self.path = ""
-        self.history: list[str] = []
-
-    # ------------------------------------------------- folder compare (1.15)
-
-    def set_folder_mode(self) -> None:
-        """The path box, in place of the name and where it is. Once a folder
-        tab, always one, so nothing has to undo this."""
-        if self.folder_mode:
-            return
-        self.folder_mode = True
-        self.name.hide()
-        self.where.hide()
-        self.facts.hide()
         self.up = QToolButton()
         self.up.setProperty("role", "nav")
         self.up.setProperty("glyph", "up")
         self.up.setFocusPolicy(Qt.NoFocus)
         self.up.setToolTip("Up one folder on this side; the other side stays")
         self.up.clicked.connect(lambda _c=False: self._go_up())
+        self.up.hide()
         self.field = QLineEdit()
-        self.field.setProperty("role", "findfield")
-        self.field.setPlaceholderText("Type or paste a folder and press Enter")
-        self.field.setToolTip("This side's folder. Type or paste another and press Enter "
-                              "to compare it with the other side, or drop a folder here.")
+        self.field.setProperty("role", "pathbox")
+        self.field.setPlaceholderText("Type or paste a file and press Enter")
+        self.field.setToolTip("This side's file. Type or paste another and press Enter to "
+                              "compare it with the other side, or drop one here.")
         self.field.returnPressed.connect(lambda: self.pathChosen.emit(self.field.text()))
         self.field.installEventFilter(self)
         self.places = QToolButton()
         self.places.setProperty("role", "nav")
         self.places.setProperty("glyph", "chevron_down")
         self.places.setFocusPolicy(Qt.NoFocus)
-        self.places.setToolTip("Parent folders and recent folders")
+        self.places.setToolTip("Recent files")
         self.places.setPopupMode(QToolButton.InstantPopup)
         places = QMenu(self.places)
         places.aboutToShow.connect(lambda: self._fill_places(places))
@@ -192,20 +169,60 @@ class SideHead(QWidget):
         self.browse.setProperty("role", "nav")
         self.browse.setProperty("glyph", "open")
         self.browse.setFocusPolicy(Qt.NoFocus)
-        self.browse.setToolTip("Choose a folder for this side")
+        self.browse.setToolTip("Choose a file for this side")
         self.browse.clicked.connect(lambda _c=False: self.browseRequested.emit())
-        top = self._top
-        top.insertWidget(0, self.up)
-        top.insertWidget(1, self.field, 1)
-        top.insertWidget(2, self.places)
-        top.insertWidget(3, self.browse)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(4)
-        self.layout().setContentsMargins(6, 4, 8, 4)
+        top.addWidget(self.up)
+        top.addWidget(self.name)
+        top.addWidget(self.field, 1)
+        top.addWidget(self.places)
+        top.addWidget(self.browse)
+        under = QHBoxLayout()
+        under.setContentsMargins(0, 0, 0, 0)
+        under.setSpacing(8)
+        under.addWidget(self.facts)
+        under.addStretch(1)
+        under.addWidget(self.state)
+        under.addWidget(self.again)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(6, 4, 8, 2)
+        box.setSpacing(1)
+        box.addLayout(top)
+        box.addLayout(under)
+        self._top = top
+        self._under = under
+        self.folder_mode = False
+        self.path = ""
+        self.history: list[str] = []
         self.setAcceptDrops(True)
 
-    def apply_tokens(self, tokens: dict[str, str]) -> None:
-        if not self.folder_mode:
+    # ------------------------------------------------- folder compare (1.15)
+
+    def set_folder_mode(self) -> None:
+        """A folder's path box: Up appears, the line of facts goes (a folder
+        has none) and the state moves up beside the box. Once a folder tab,
+        always one, so nothing has to undo this."""
+        if self.folder_mode:
             return
+        self.folder_mode = True
+        self.up.show()
+        self.facts.hide()
+        self.name.hide()
+        self._under.removeWidget(self.state)
+        self._under.removeWidget(self.again)
+        self._top.addWidget(self.state)
+        self._top.addWidget(self.again)
+        self.field.setPlaceholderText("Type or paste a folder and press Enter")
+        self.field.setToolTip("This side's folder. Type or paste another and press Enter "
+                              "to compare it with the other side, or drop a folder here.")
+        self.places.setToolTip("Parent folders and recent folders")
+        self.browse.setToolTip("Choose a folder for this side")
+        self.layout().setContentsMargins(6, 4, 8, 4)
+
+    def apply_tokens(self, tokens: dict[str, str]) -> None:
         ratio = float(self.devicePixelRatioF() or 1.0)
         for button in (self.up, self.places, self.browse):
             button.setIcon(glyphs.icon(button.property("glyph"), colour=tokens["txt_1"],
@@ -240,7 +257,7 @@ class SideHead(QWidget):
 
     def _fill_places(self, menu: QMenu) -> None:
         menu.clear()
-        above = F.ancestors(self.path)
+        above = F.ancestors(self.path) if self.folder_mode else []
         if above:
             menu.addSection("Up")
             for path in above:
@@ -251,11 +268,12 @@ class SideHead(QWidget):
             for path in recent:
                 menu.addAction(display(path), lambda p=path: self.pathChosen.emit(p))
         if not above and not recent:
-            menu.addAction("No parent or recent folders").setEnabled(False)
+            menu.addAction("No parent or recent folders" if self.folder_mode
+                           else "No recent files").setEnabled(False)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        """Escape in the path box puts back the folder being shown."""
-        if self.folder_mode and watched is self.field and event.type() == QEvent.KeyPress \
+        """Escape in the path box puts back the path being shown."""
+        if watched is self.field and event.type() == QEvent.KeyPress \
                 and event.key() == Qt.Key_Escape:
             self.field.setText(display(self.path))
             self.field.setModified(False)
@@ -264,13 +282,13 @@ class SideHead(QWidget):
         return super().eventFilter(watched, event)
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
-        if self.folder_mode and _dropped_path(event.mimeData()):
+        if _dropped_path(event.mimeData()):
             event.acceptProposedAction()
         else:
             super().dragEnterEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802
-        path = _dropped_path(event.mimeData()) if self.folder_mode else ""
+        path = _dropped_path(event.mimeData())
         if path:
             event.acceptProposedAction()
             self.pathChosen.emit(path)
@@ -278,25 +296,40 @@ class SideHead(QWidget):
             super().dropEvent(event)
 
     def show_side(self, side: core.Side, *, encoding_changed: bool = False) -> None:
+        self.path = side.path
         path = display(side.path)
-        folder, name = ntpath.split(path)
-        self.name.setText(side.title or name or path or "Nothing chosen")
-        self.where.setText(folder if not side.title else path)
-        self.where.setToolTip(path)
-        facts = side.loaded.facts if side.loaded is not None and side.state == core.READY else ""
-        if facts and side.doc is not None:
+        if not self.field.hasFocus() or not self.field.isModified():
+            self.field.setText(path)
+            self.field.setModified(False)
+            # The end, where the file's name is, is the part worth seeing.
+            self.field.setCursorPosition(len(path))
+        self.field.setToolTip(path or "Nothing chosen: type a path, browse, or drop a file")
+        self.name.setText(side.title)
+        self.name.setVisible(bool(side.title))
+        facts = ""
+        if side.loaded is not None and side.state == core.READY and side.doc is not None:
             # What a save would write, which after an edit or a change from
             # this menu is not what was read.
             label = LABELS.get(side.encoding, side.encoding) + (" BOM" if side.bom else "")
             eol = _eol_now(side.doc.endings) or side.loaded.eol
-            parts = [label + (" (on save)" if encoding_changed else "")]
+            parts = []
+            if side.loaded.mtime:
+                import datetime as _dt
+
+                parts.append(_dt.datetime.fromtimestamp(side.loaded.mtime)
+                             .strftime("%Y-%m-%d %H:%M"))
+            if side.path:
+                parts.append(f"{side.loaded.size:,} bytes")
+            parts.append(label + (" (on save)" if encoding_changed else ""))
             if eol:
                 parts.append(eol)
             count = len(side.doc.lines)
             parts.append(f"{count:,} line{'s' if count != 1 else ''}")
-            facts = "  ·  ".join(parts)
+            facts = "   ".join(parts)
+        elif side.loaded is not None and side.state == core.READY:
+            facts = side.loaded.facts
         if side.readonly and facts:
-            facts += "  ·  read-only"
+            facts += "   read-only"
         self.facts.setText(facts)
         self.facts.setVisible(bool(facts))
         bad = side.state in (core.FAILED, core.SLOW)
@@ -518,12 +551,15 @@ class CompareTab(QWidget):
     openExtracted = Signal(str, str, object)
     #: 1.17: something the window's toolbar or menus show has changed.
     commandsChanged = Signal()
+    #: 1.18: a side was pointed at another file: (left, right), to remember.
+    pairChanged = Signal(str, str)
 
     def __init__(self, session: core.Session, tokens: dict[str, str],
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.session = session
         self._tokens = tokens
+        self._toolbar()
         self._shown_result = None
         self._matches: list[tuple[int, int]] = []
         self._pending_saves: set[int] = set()
@@ -589,9 +625,15 @@ class CompareTab(QWidget):
         self.stack.addWidget(self.table)
 
         self.heads = (SideHead(), SideHead())
+        self._file_history = list(session.options.file_history)
         for index, head in enumerate(self.heads):
             head.retry.connect(lambda i=index: self._reload_side(i))
             head.menuRequested.connect(lambda i=index: self._side_menu(i))
+            head.history = self._file_history
+            head.pathChosen.connect(lambda path, i=index: self._path_chosen(i, path))
+            head.browseRequested.connect(lambda i=index: self._browse_side(i))
+        self.view.set_show(session.options.show, session.options.context)
+        self.view.set_details(session.options.details)
         heads = QHBoxLayout()
         heads.setContentsMargins(0, 0, 0, 0)
         heads.setSpacing(0)
@@ -614,7 +656,6 @@ class CompareTab(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 6, 8, 0)
         outer.setSpacing(6)
-        self._toolbar()
         outer.addWidget(self.find)
         outer.addWidget(card, 1)
 
@@ -1437,8 +1478,6 @@ class CompareTab(QWidget):
                 head.set_folder_mode()
                 head.history = self._folder_history
                 head.apply_tokens(self._tokens)
-                head.pathChosen.connect(lambda path, i=index: self.set_folder(i, path))
-                head.browseRequested.connect(lambda i=index: self._browse_folder(i))
             folder.changed.connect(self._show_folder_heads)
             self.folders.rebase.connect(self._rebase)
             self.folders.openPair.connect(self.openPair)
@@ -1459,6 +1498,49 @@ class CompareTab(QWidget):
             return
         for head, side in zip(self.heads, self.folders.session.sides):
             head.show_folder(side.path, side.state, side.error)
+
+    def _path_chosen(self, index: int, path: str) -> None:
+        if self.folders is not None:
+            self.set_folder(index, path)
+        else:
+            self.set_file(index, path)
+
+    def _browse_side(self, index: int) -> None:
+        if self.folders is not None:
+            self._browse_folder(index)
+        else:
+            self._browse_file(index)
+
+    def set_file(self, index: int, path: str) -> bool:
+        """Point one side of a text tab at another file (1.18). The other
+        side keeps what it read; edits on this side are asked about first."""
+        path = path.strip().strip('"')
+        s = self.session
+        side = s.sides[index]
+        if not path or path == side.path:
+            self.heads[index].show_side(side)
+            return False
+        if side.dirty and not self._confirm_discard("Open another file on this side"):
+            self.heads[index].show_side(side)
+            return False
+        if not s.set_path(index, path):
+            return False
+        self._shown_result = None
+        history = self._file_history
+        history[:] = [path] + [p for p in history if p.lower() != path.lower()]
+        del history[20:]
+        self.sibling = siblings.for_pair(s.sides[0].path, s.sides[1].path)
+        self.pairChanged.emit(s.sides[0].path, s.sides[1].path)
+        self.titleChanged.emit()
+        return True
+
+    def _browse_file(self, index: int) -> None:
+        start = ntpath.dirname(display(self.session.sides[index].path)) or ntpath.dirname(
+            display(self.session.sides[1 - index].path))
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self, f"Choose the {'left' if index == 0 else 'right'} file", start)
+        if chosen:
+            self.set_file(index, QDir.toNativeSeparators(chosen))
 
     def set_folder(self, index: int, path: str) -> bool:
         """Point one side of a folder tab at another folder (1.15). The other
@@ -1825,7 +1907,7 @@ class CompareTab(QWidget):
     def command_state(self, id_: str) -> State:
         s = self.session
         kind = self.page_kind()
-        if id_ in ("swap", "reload", "save-session", "copy-paths"):
+        if id_ in ("swap", "reload", "save-session", "copy-paths", "open-left", "open-right"):
             return State()
         if kind == "folder":
             answer = self.folders.command_state(id_)
@@ -1883,6 +1965,10 @@ class CompareTab(QWidget):
                          label="Ignore comments" + (
                              f"  ({' '.join(m.strip() for m in rules.markers)})"
                              if rules.markers else "  (not known for this file type)"))
+        if id_ in self.VIEW_SHOWS:
+            return State(checked=self.view.state.show == self.VIEW_SHOWS[id_])
+        if id_ == "details":
+            return State(checked=self.view.details.isVisibleTo(self.view))
         if id_ == "mark-chars":
             return State(checked=s.options.intraline == "char")
         if id_ == "mark-words":
@@ -1921,8 +2007,13 @@ class CompareTab(QWidget):
             return State(visible=bool(rules.patterns))
         return HIDDEN
 
+    #: 1.18: the text view's show filter, by command.
+    VIEW_SHOWS = {"view-all": "all", "view-diffs": "diffs", "view-same": "same",
+                  "view-context": "context"}
+
     #: The text commands shown (greyed) while a text tab has nothing to show.
     TEXT_IDS = frozenset({
+        "view-all", "view-diffs", "view-same", "view-context", "details",
         "rules", "copy-left", "copy-right", "edit", "save", "undo", "redo", "find",
         "copy-all-left", "copy-all-right", "first", "last", "report", "mark-chars",
         "mark-words", "ignore-case", "ignore-blank", "ignore-comments", "copy-text",
@@ -1933,8 +2024,18 @@ class CompareTab(QWidget):
         s = self.session
         if self.page_kind() == "folder" and self.folders.run_command(id_):
             return
+        if id_ in ("open-left", "open-right"):
+            self._browse_side(0 if id_ == "open-left" else 1)
+            return
         if id_ in ("previous", "next", "first", "last"):
             self._navigate(id_)
+        elif id_ in self.VIEW_SHOWS:
+            self.view.set_show(self.VIEW_SHOWS[id_])
+            self.setting.emit("view.show", self.VIEW_SHOWS[id_])
+        elif id_ == "details":
+            on = not self.view.details.isVisibleTo(self.view)
+            self.view.set_details(on)
+            self.setting.emit("view.details", on)
         elif id_ == "structure":
             s.set_structure(not s.structure)
         elif id_ == "rules":
