@@ -150,7 +150,8 @@ def test_f5_and_the_buttons_copy_the_selection_from_the_side_you_are_on(qt_app, 
         view.open_sync = lambda direction, mode, nodes=None: calls.append(
             (direction, mode, [n.name for n in nodes or []]))
         model = view.model
-        assert not view.to_right.isEnabled()          # nothing selected yet
+        # 1.17: the copy buttons are the window's toolbar now, asking the view.
+        assert not window.command_state("copy-right").enabled   # nothing selected yet
         view.copy_selected(S.TO_RIGHT)
         assert calls == []
 
@@ -158,7 +159,9 @@ def test_f5_and_the_buttons_copy_the_selection_from_the_side_you_are_on(qt_app, 
         view.tree.selectionModel().select(
             model.index(rows["sub"], 0),
             QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
-        assert view.to_right.isEnabled() and view.to_left.isEnabled()
+        assert window.command_state("copy-right").enabled
+        assert window.command_state("copy-left").enabled
+        assert window.toolbar.buttons["copy-right"].isEnabled()
 
         view._command("copy-from-side")               # F5 on the left half
         assert calls[-1] == (S.TO_RIGHT, S.COPY, ["sub"])
@@ -174,7 +177,7 @@ def test_f5_and_the_buttons_copy_the_selection_from_the_side_you_are_on(qt_app, 
         assert view.side == 0
         view._command("copy-left")                    # Alt+Left, whatever the side
         assert calls[-1][0] == S.TO_LEFT
-        view.to_right.click()
+        window.toolbar.buttons["copy-right"].click()
         assert calls[-1][0] == S.TO_RIGHT
     finally:
         window._may_close = lambda pages: True
@@ -228,7 +231,8 @@ def test_a_folder_compare_opens_collapsed_on_the_differences(qt_app, tmp_path):
         assert "both.txt" not in names                 # the same file is filtered out
         assert not any(view.tree.isExpanded(model.index(r, 0))
                        for r in range(model.rowCount()))
-        assert view.shows[F.SHOW_DIFFERENT].text().endswith("2")
+        assert window.command_state("show-diffs").count == 2
+        assert window.toolbar.buttons["show-diffs"].text().endswith("2")
         rows = {model.node(model.index(r, 0)).name: r for r in range(model.rowCount())}
         assert model.data(model.index(rows["sub"], V.LSIZE)) == "1 file"
 

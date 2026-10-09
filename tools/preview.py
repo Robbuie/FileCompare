@@ -75,6 +75,9 @@ def act(app, page, actions) -> None:
       next            press next difference
       expand          open every folder of a folder compare
       mode=VIEW       switch the View to text, rungs, table, hex or image
+      menu=TITLE      open that menu of the menu bar; it is saved beside the
+                      picture as `<out>-menu.png` (1.17)
+      run=COMMAND     run a command from `ui/commands.py`, as a click would
     """
     for action in actions or ():
         name, _, value = action.partition("=")
@@ -90,6 +93,18 @@ def act(app, page, actions) -> None:
             page.folders.tree.expandAll()
         elif name == "mode":
             page.set_mode(value)
+        elif name == "menu":
+            from app.ui.chrome import sync_menu
+
+            window = page.window()
+            menu = window.menubar.menus[value]
+            sync_menu(menu, window)
+            menu.popup(window.mapToGlobal(window.rect().topLeft()))
+            for _ in range(5):
+                app.processEvents()
+            window._preview_menu = menu
+        elif name == "run":
+            page.window().run_command(value)
         else:
             page._command(name)
         for _ in range(3):
@@ -116,6 +131,10 @@ def render(out: str, *, pair=DEFAULT_PAIR, start: bool = False, theme="dark",
     settle(app, window, 3)
     app.processEvents()
     window.grab().save(out)
+    menu = getattr(window, "_preview_menu", None)
+    if menu is not None:
+        menu.grab().save(os.path.splitext(out)[0] + "-menu.png")
+        menu.close()
     # A preview that edited something must not stop on "unsaved changes".
     window._may_close = lambda pages: True
     window.close()

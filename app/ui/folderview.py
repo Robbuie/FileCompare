@@ -53,6 +53,7 @@ from app.core import folders as F
 from app.core import syncplan as S
 from app.core.folderdiff import FolderSession
 from app.ui import fileicons, glyphs
+from app.ui.commands import State
 from app.ui.diffview import parse_colour
 
 #: Left half, verdict, right half -- the same three columns on each side, in
@@ -88,6 +89,15 @@ SHOW_LABELS = (
     (F.SHOW_RIGHT, "Right newer"),
     (F.SHOW_SAME, "Same"),
 )
+
+#: 1.17: the toolbar's show buttons, by command.
+SHOW_COMMANDS = {
+    "show-all": F.SHOW_ALL,
+    "show-diffs": F.SHOW_DIFFERENT,
+    "show-left": F.SHOW_LEFT,
+    "show-right": F.SHOW_RIGHT,
+    "show-same": F.SHOW_SAME,
+}
 
 
 def _size(entry: F.Entry | None) -> str:
@@ -530,6 +540,8 @@ class FolderView(QWidget):
     sideChanged = Signal(int)
     #: 1.15: compare other folders: (left, right), "" for a side that stays.
     rebase = Signal(str, str)
+    #: 1.17: something the toolbar or a menu shows has changed.
+    commandsChanged = Signal()
 
     def __init__(self, session: FolderSession, tokens: dict[str, str], *,
                  mask: str = "", open_expanded: bool = False,
@@ -573,26 +585,16 @@ class FolderView(QWidget):
             header.setSectionResizeMode(column, QHeaderView.Fixed)
         header.sectionResized.connect(lambda *_a: self._emit_split())
 
-        self.shows: dict[str, QPushButton] = {}
-        segments = QWidget()
-        segments.setProperty("role", "segments")
-        segments.setAttribute(Qt.WA_StyledBackground, True)
-        seg = QHBoxLayout(segments)
-        seg.setContentsMargins(2, 2, 2, 2)
-        seg.setSpacing(2)
-        for value, label in SHOW_LABELS:
-            button = QPushButton(label)
-            button.setProperty("role", "segment")
-            button.setCheckable(True)
-            button.setFocusPolicy(Qt.NoFocus)
-            button.clicked.connect(lambda _c=False, v=value: self.set_show(v, keep=True))
-            seg.addWidget(button)
-            self.shows[value] = button
+        # 1.17: the show filter, Compare contents, Sync, the copies and
+        # Expand moved to the window's toolbar and menus, which ask
+        # `command_state` and call `run_command`. What stays here is the name
+        # filter, which is typed into and so cannot be a button.
+        self.show = F.SHOW_DIFFERENT
+        self.totals: dict[str, int] = {}
+        self.open_expanded = bool(open_expanded)
         self.mask = QLineEdit(mask)
         self.mask.setProperty("role", "findfield")
-        self.mask.setMaximumWidth(460)
-        self.mask.setMinimumWidth(150)
-        self.mask.setPlaceholderText("*.L5X;*.ini  -.git;-*.bak")
+        self.mask.setPlaceholderText("*.ini;*.txt  -.git;-*.bak")
         self._mask_label = QLabel("Filter")
         self._mask_label.setProperty("role", "hint")
         self.mask.setToolTip("Which names take part. Patterns separated by ; -- a "
@@ -602,113 +604,6 @@ class FolderView(QWidget):
         self._mask_timer.setInterval(400)
         self._mask_timer.timeout.connect(lambda: self.session.set_mask(self.mask.text()))
         self.mask.textChanged.connect(lambda _t: self._mask_timer.start())
-        self.contents = QToolButton()
-        self.contents.setText("Compare contents")
-        self.contents.setProperty("role", "retry")
-        self.contents.setPopupMode(QToolButton.MenuButtonPopup)
-        self.contents.setFocusPolicy(Qt.NoFocus)
-        self.contents.setToolTip("Read the files whose size and time cannot settle it: "
-                                 "same size, different time")
-        self.contents.clicked.connect(lambda _c=False: self._contents())
-        menu = QMenu(self)
-        menu.addAction("Same size, different time", self._contents)
-        menu.addAction("Every pair on both sides", lambda: self._contents(all_pairs=True))
-        menu.addAction("The selected rows", self._contents_selected)
-        menu.addSeparator()
-        menu.addAction("Stop", self.session.cancel_contents)
-        # 1.8: two ways of not trusting the clock.
-        menu.addSeparator()
-        self._always = menu.addAction("Always compare contents")
-        self._always.setCheckable(True)
-        self._always.setChecked(self.session.by_content)
-        self._always.setToolTip("After every walk, read every pair with the same size, so "
-                                "a file only counts as different when its bytes are")
-        self._always.toggled.connect(self._set_by_content)
-        self._hour = menu.addAction("Ignore a one-hour shift (clock change)")
-        self._hour.setCheckable(True)
-        self._hour.setChecked(self.session.hour)
-        self._hour.toggled.connect(self._set_hour)
-        self._zips = menu.addAction("Look inside .zip files")
-        self._zips.setCheckable(True)
-        self._zips.setChecked(self.session.archives)
-        self._zips.setToolTip("List each zip's files under it and compare them by size "
-                              "and CRC, without unpacking anything")
-        self._zips.toggled.connect(self._set_archives)
-        menu.setToolTipsVisible(True)
-        self.contents.setMenu(menu)
-        # 1.0: sync, handed to File Manager's queue (`ui/syncdialog.py`).
-        self.sync = QToolButton()
-        self.sync.setText("Sync")
-        self.sync.setProperty("role", "retry")
-        self.sync.setPopupMode(QToolButton.MenuButtonPopup)
-        self.sync.setFocusPolicy(Qt.NoFocus)
-        self.sync.setToolTip("Make one side match the other: previewed here, then run "
-                             "by File Manager's queue")
-        self.sync.clicked.connect(lambda _c=False: self.open_sync(S.TO_RIGHT, S.UPDATE))
-        sync_menu = QMenu(self)
-        sync_menu.addAction("Update left to right",
-                            lambda: self.open_sync(S.TO_RIGHT, S.UPDATE))
-        sync_menu.addAction("Update right to left",
-                            lambda: self.open_sync(S.TO_LEFT, S.UPDATE))
-        sync_menu.addSeparator()
-        sync_menu.addAction("Mirror left to right",
-                            lambda: self.open_sync(S.TO_RIGHT, S.MIRROR))
-        sync_menu.addAction("Mirror right to left",
-                            lambda: self.open_sync(S.TO_LEFT, S.MIRROR))
-        sync_menu.addSeparator()
-        self._stop_waiting = sync_menu.addAction("Stop waiting for File Manager",
-                                                 self.session.forget_sync)
-        sync_menu.aboutToShow.connect(
-            lambda: self._stop_waiting.setEnabled(self.session.syncing))
-        self.sync.setMenu(sync_menu)
-        # 1.14: the selected rows to one side, through the same preview and
-        # File Manager handoff as the right-click menu's copies.
-        self.to_left = QToolButton()
-        self.to_left.setText("Copy to left")
-        self.to_left.setProperty("role", "retry")
-        self.to_left.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.to_left.setFocusPolicy(Qt.NoFocus)
-        self.to_left.setToolTip("Copy the selected rows to the left folder (Alt+Left; "
-                                "F5 copies from the side you are on)")
-        self.to_left.clicked.connect(lambda _c=False: self.copy_selected(S.TO_LEFT))
-        self.to_right = QToolButton()
-        self.to_right.setText("Copy to right")
-        self.to_right.setProperty("role", "retry")
-        self.to_right.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.to_right.setLayoutDirection(Qt.RightToLeft)
-        self.to_right.setFocusPolicy(Qt.NoFocus)
-        self.to_right.setToolTip("Copy the selected rows to the right folder (Alt+Right; "
-                                 "F5 copies from the side you are on)")
-        self.to_right.clicked.connect(lambda _c=False: self.copy_selected(S.TO_RIGHT))
-        # 1.15: the tree opens collapsed, with each folder's size column
-        # saying how many files under it differ; Expand opens just the
-        # folders that hold differences, its menu everything.
-        self.expand = QToolButton()
-        self.expand.setText("Expand")
-        self.expand.setProperty("role", "retry")
-        self.expand.setPopupMode(QToolButton.MenuButtonPopup)
-        self.expand.setFocusPolicy(Qt.NoFocus)
-        self.expand.setToolTip("Open the folders that hold differences")
-        self.expand.clicked.connect(lambda _c=False: self.expand_differences())
-        expand_menu = QMenu(self)
-        expand_menu.addAction("Expand differences", self.expand_differences)
-        expand_menu.addAction("Expand all", self.tree.expandAll)
-        expand_menu.addAction("Collapse all", self.collapse_all)
-        expand_menu.addSeparator()
-        self._open_expanded = expand_menu.addAction("Open with differences expanded")
-        self._open_expanded.setCheckable(True)
-        self._open_expanded.setChecked(open_expanded)
-        self._open_expanded.setToolTip("Open each new comparison with the folders that hold "
-                                       "differences expanded, rather than collapsed")
-        self._open_expanded.toggled.connect(
-            lambda on: self.setting.emit("folders.open_expanded", bool(on)))
-        expand_menu.setToolTipsVisible(True)
-        self.expand.setMenu(expand_menu)
-        self.collapse = QToolButton()
-        self.collapse.setText("Collapse")
-        self.collapse.setProperty("role", "retry")
-        self.collapse.setFocusPolicy(Qt.NoFocus)
-        self.collapse.clicked.connect(lambda _c=False: self.collapse_all())
         #: 1.15: the folders open in the tree, by rel and lowercased, kept
         #: across every rebuild -- a content compare, a filter, a walk again,
         #: one side pointed somewhere else -- so the tree stays as it was left.
@@ -721,20 +616,10 @@ class FolderView(QWidget):
         self.line.hide()
 
         bar = QHBoxLayout()
-        bar.setContentsMargins(8, 6, 8, 6)
+        bar.setContentsMargins(8, 4, 8, 4)
         bar.setSpacing(6)
-        bar.addWidget(segments)
-        bar.addSpacing(6)
         bar.addWidget(self._mask_label)
         bar.addWidget(self.mask, 1)
-        bar.addStretch(0)
-        bar.addWidget(self.to_left)
-        bar.addWidget(self.to_right)
-        bar.addSpacing(6)
-        bar.addWidget(self.contents)
-        bar.addWidget(self.sync)
-        bar.addWidget(self.expand)
-        bar.addWidget(self.collapse)
         top = QWidget()
         top.setProperty("role", "folderbar")
         top.setAttribute(Qt.WA_StyledBackground, True)
@@ -760,10 +645,6 @@ class FolderView(QWidget):
         # The tree is in the interface font, like File Manager's listing; the
         # sizes line up by being right-aligned, not by being monospaced.
         self.model.tokens = tokens
-        ratio = float(self.devicePixelRatioF() or 1.0)
-        for button, glyph in ((self.to_left, "copy_left"), (self.to_right, "copy_right")):
-            button.setIcon(glyphs.icon(glyph, colour=tokens.get("txt_1", ""),
-                                       muted=tokens.get("txt_2", ""), size=14, ratio=ratio))
         self._size_columns()
         self.tree.viewport().update()
 
@@ -811,7 +692,7 @@ class FolderView(QWidget):
             return
         if self._opened is None:
             self._opened = set()
-            if self._open_expanded.isChecked():
+            if self.open_expanded:
                 self._expand_differences()
                 return
         self.reopen(self._opened)
@@ -863,8 +744,6 @@ class FolderView(QWidget):
     def _progress(self) -> None:
         text = self.session.status()
         self.line.setText(text)
-        self.contents.setEnabled(self.session.tree is not None)
-        self.sync.setEnabled(self.session.tree is not None or self.session.syncing)
         self._update_copies()
         if self.session.syncing:
             text += "  ·  waiting for File Manager's queue"
@@ -889,8 +768,7 @@ class FolderView(QWidget):
 
     def set_show(self, show: str, rebuild: bool = True, *, keep: bool = False) -> None:
         """`keep`: the user picked it, so it is kept for next time (1.15)."""
-        for value, button in self.shows.items():
-            button.setChecked(value == show)
+        self.show = show
         if rebuild or self.model.show != show:
             self._rebuild(self.model.root, show)
             self._update_counts()
@@ -901,10 +779,8 @@ class FolderView(QWidget):
         """The show buttons carry their counts (1.15), which makes them the
         summary as well as the filter: one click from "Right newer 7" to the
         seven."""
-        totals = F.show_counts(self.model.root) if self.model.root is not None else {}
-        for value, label in SHOW_LABELS:
-            count = totals.get(value)
-            self.shows[value].setText(f"{label}  {count:,}" if count is not None else label)
+        self.totals = F.show_counts(self.model.root) if self.model.root is not None else {}
+        self.commandsChanged.emit()
 
     # ----------------------------------------------------------- actions
 
@@ -979,10 +855,11 @@ class FolderView(QWidget):
             self.sideChanged.emit(side)
 
     def _update_copies(self) -> None:
-        ready = (self.session.tree is not None and not self.session.syncing
-                 and bool(self.selected()))
-        self.to_left.setEnabled(ready)
-        self.to_right.setEnabled(ready)
+        self.commandsChanged.emit()
+
+    def can_copy(self) -> bool:
+        return (self.session.tree is not None and not self.session.syncing
+                and bool(self.selected()))
 
     def _remote(self, sides) -> None:
         if self._dialog is not None:
@@ -991,8 +868,7 @@ class FolderView(QWidget):
     def _handed(self, text: str) -> None:
         self.line.setText(text)
         self.status.emit(text)
-        # The line keeps the handoff's words; only the button follows the state.
-        self.sync.setEnabled(self.session.tree is not None or self.session.syncing)
+        self.commandsChanged.emit()
 
     def _set_by_content(self, on: bool) -> None:
         self.session.set_by_content(on)
@@ -1135,3 +1011,103 @@ class FolderView(QWidget):
 
     def focus(self) -> None:
         self.tree.setFocus(Qt.OtherFocusReason)
+
+    # ------------------------------------------------- commands (1.17)
+
+    def command_state(self, id_: str) -> State | None:
+        """What the toolbar and menus show for a folder command; None for
+        one this view does not answer, which the tab then decides."""
+        session = self.session
+        ready = session.tree is not None
+        if id_ in SHOW_COMMANDS:
+            value = SHOW_COMMANDS[id_]
+            return State(enabled=ready, checked=self.show == value,
+                         count=self.totals.get(value) if ready else None)
+        if id_ in ("copy-left", "copy-right", "copy-from-side"):
+            return State(enabled=self.can_copy())
+        if id_ in ("contents", "contents-all"):
+            return State(enabled=ready and not session.syncing)
+        if id_ == "contents-selected":
+            return State(enabled=ready and bool(self.selected()))
+        if id_ == "contents-stop":
+            return State(enabled=session.content is not None)
+        if id_ == "always-contents":
+            return State(checked=session.by_content)
+        if id_ == "ignore-hour":
+            return State(checked=session.hour)
+        if id_ == "look-in-zips":
+            return State(checked=session.archives)
+        if id_ in ("sync", "sync-update-left", "sync-mirror-right", "sync-mirror-left"):
+            return State(enabled=ready and not session.syncing and not session.building)
+        if id_ == "sync-stop":
+            return State(enabled=session.syncing)
+        if id_ in ("expand", "expand-all", "collapse", "next", "previous"):
+            return State(enabled=ready)
+        if id_ == "open-expanded":
+            return State(checked=self.open_expanded)
+        if id_ == "filter":
+            return State()
+        if id_ in ("copy-text", "select-all"):
+            return State(enabled=ready)
+        return None
+
+    def run_command(self, id_: str) -> bool:
+        """Do a folder command. False when it is not one of this view's."""
+        session = self.session
+        if id_ in SHOW_COMMANDS:
+            self.set_show(SHOW_COMMANDS[id_], keep=True)
+        elif id_ == "copy-left":
+            self.copy_selected(S.TO_LEFT)
+        elif id_ == "copy-right":
+            self.copy_selected(S.TO_RIGHT)
+        elif id_ == "copy-from-side":
+            self._command("copy-from-side")
+        elif id_ == "contents":
+            self._contents()
+        elif id_ == "contents-all":
+            self._contents(all_pairs=True)
+        elif id_ == "contents-selected":
+            self._contents_selected()
+        elif id_ == "contents-stop":
+            session.cancel_contents()
+            self.commandsChanged.emit()
+        elif id_ == "always-contents":
+            self._set_by_content(not session.by_content)
+        elif id_ == "ignore-hour":
+            self._set_hour(not session.hour)
+        elif id_ == "look-in-zips":
+            self._set_archives(not session.archives)
+        elif id_ == "sync":
+            self.open_sync(S.TO_RIGHT, S.UPDATE)
+        elif id_ == "sync-update-left":
+            self.open_sync(S.TO_LEFT, S.UPDATE)
+        elif id_ == "sync-mirror-right":
+            self.open_sync(S.TO_RIGHT, S.MIRROR)
+        elif id_ == "sync-mirror-left":
+            self.open_sync(S.TO_LEFT, S.MIRROR)
+        elif id_ == "sync-stop":
+            session.forget_sync()
+            self.commandsChanged.emit()
+        elif id_ == "expand":
+            self.expand_differences()
+        elif id_ == "expand-all":
+            self.tree.expandAll()
+        elif id_ == "collapse":
+            self.collapse_all()
+        elif id_ == "open-expanded":
+            self.open_expanded = not self.open_expanded
+            self.setting.emit("folders.open_expanded", self.open_expanded)
+        elif id_ == "filter":
+            self.mask.setFocus(Qt.ShortcutFocusReason)
+            self.mask.selectAll()
+        elif id_ == "next":
+            self._step(1)
+        elif id_ == "previous":
+            self._step(-1)
+        elif id_ == "copy-text":
+            self._command("copy-path")
+        elif id_ == "select-all":
+            self.tree.selectAll()
+        else:
+            return False
+        return True

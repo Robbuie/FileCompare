@@ -102,6 +102,8 @@ class MergeTab(QWidget):
     savesFinished = Signal(bool)
     #: The merge ended: True when the output was saved with nothing unresolved.
     finished = Signal(bool)
+    #: 1.17: something the window's toolbar or menus show has changed.
+    commandsChanged = Signal()
 
     def __init__(self, session: MergeSession, tokens: dict[str, str],
                  parent: QWidget | None = None) -> None:
@@ -226,6 +228,32 @@ class MergeTab(QWidget):
     def stop(self) -> None:
         pass
 
+    # ------------------------------------------------- commands (1.17)
+
+    def page_kind(self) -> str:
+        return "merge"
+
+    def command_state(self, id_: str):
+        from app.ui.commands import HIDDEN, State
+
+        if id_ in ("next-conflict", "previous-conflict", "next", "previous"):
+            merge = getattr(self.session, "merge", None)
+            return State(enabled=merge is not None and bool(merge.chunks))
+        if id_ == "save":
+            return State()
+        return HIDDEN
+
+    def run_command(self, id_: str) -> None:
+        if id_ in ("next-conflict", "previous-conflict"):
+            self.step(1 if id_ == "next-conflict" else -1, True)
+        elif id_ in ("next", "previous"):
+            self.step(1 if id_ == "next" else -1, False)
+        elif id_ == "save":
+            self.save()
+
+    def fill_menu(self, name: str, menu) -> None:
+        pass
+
     def save_all(self) -> bool:
         return self.save()
 
@@ -247,6 +275,7 @@ class MergeTab(QWidget):
         if s.merge is None:
             self.count.setText("Could not merge: " + s.problem if s.problem else "Reading...")
             self.titleChanged.emit()
+            self.commandsChanged.emit()
             return
         lines, self._spans = s.output()
         if s.freehand is None:
@@ -266,6 +295,7 @@ class MergeTab(QWidget):
         self._show_current()
         self._update_count()
         self.titleChanged.emit()
+        self.commandsChanged.emit()
 
     def _wash_output(self) -> None:
         s = self.session

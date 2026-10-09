@@ -43,6 +43,8 @@ from app.io import sessionfile
 from app.theme import sheet
 from app.theme.tokens import ACCENT_LABELS, ACCENTS, DENSITIES, DENSITY_LABELS, THEME_LABELS, THEMES
 from app.ui import glyphs, winframe
+from app.ui.chrome import MenuBar, ToolBar
+from app.ui.commands import HIDDEN, ONLY, State
 from app.ui.comparetab import CompareTab
 from app.ui.mergetab import MergeTab
 from app.ui.starttab import StartTab
@@ -145,12 +147,23 @@ class MainWindow(QMainWindow):
 
         self._status_left = QLabel()
         self._status_right = QLabel()
+        #: 1.17: where you are in the current tab ("Difference 2 of 4"), which
+        #: was in the tab's own toolbar row until the window had a toolbar.
+        self._position = QLabel()
+        self._position.setProperty("role", "position")
         self.statusBar().addWidget(self._status_left, 1)
+        self.statusBar().addPermanentWidget(self._position)
         self.statusBar().addPermanentWidget(self._status_right)
         self.statusBar().setSizeGripEnabled(False)
 
+        # 1.17: the menu bar and the labelled toolbar, both from
+        # `ui/commands.py`; this window is their provider.
+        self.menubar = MenuBar(self)
+        self.toolbar = ToolBar(self)
+
         if custom_frame:
             self._titlebar = TitleBar()
+            self._titlebar.set_menubar(self.menubar)
             self._titlebar.menuRequested.connect(self._show_app_menu)
             self._titlebar.goRequested.connect(self.new_tab)
             self._titlebar.minimizeRequested.connect(self.showMinimized)
@@ -161,12 +174,20 @@ class MainWindow(QMainWindow):
             column.setContentsMargins(0, 0, 0, 0)
             column.setSpacing(0)
             column.addWidget(self._titlebar)
+            column.addWidget(self.toolbar)
             column.addWidget(body, 1)
             self.setCentralWidget(root)
             self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
             self._frame = winframe.NativeFrame(self, glass=False, dark=self._is_dark())
         else:
-            self.setCentralWidget(body)
+            root = QWidget()
+            column = QVBoxLayout(root)
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(0)
+            column.addWidget(self.menubar)
+            column.addWidget(self.toolbar)
+            column.addWidget(body, 1)
+            self.setCentralWidget(root)
 
         self._shortcuts()
         self.apply_look(self._look, self._look_source, save=False)
@@ -197,9 +218,13 @@ class MainWindow(QMainWindow):
                                   muted=self._tokens["txt_2"], size=10))
         close.clicked.connect(lambda _c=False, p=page: self.close_page(p))
         self.tabs.setTabButton(index, QTabBar.RightSide, close)
+        changed = getattr(page, "commandsChanged", None)
+        if changed is not None:
+            changed.connect(lambda p=page: self._page_changed(p))
         self.tabs.setCurrentIndex(index)
         self.pages.setCurrentWidget(page)
         page.focus_view()
+        self._page_changed(page)
         return index
 
     def _index_of(self, page: QWidget) -> int:
@@ -211,6 +236,7 @@ class MainWindow(QMainWindow):
             self.pages.setCurrentIndex(index)
             page.focus_view()
             self._status_left.setText(getattr(page, "_last_status", ""))
+            self._page_changed(page)
 
     def _tab_moved(self, source: int, target: int) -> None:
         page = self.pages.widget(source)
@@ -435,6 +461,7 @@ class MainWindow(QMainWindow):
             self._frame.set_dark(self._is_dark())
         self._new.setIcon(glyphs.icon("plus", colour=self._tokens["txt_1"],
                                       muted=self._tokens["txt_2"], size=14))
+        self.toolbar.apply_tokens(self._tokens)
         for index in range(self.tabs.count()):
             button = self.tabs.tabButton(index, QTabBar.RightSide)
             if button is not None:
@@ -470,53 +497,129 @@ class MainWindow(QMainWindow):
             self.flash("File Manager's settings could not be read; keeping this look.")
         self.apply_look(look, source)
 
-    # ----------------------------------------------------------------- menu
+    # ------------------------------------------------------ commands (1.17)
+
+    def _page(self):
+        return self.pages.currentWidget()
+
+    def _kind(self) -> str:
+        page = self._page()
+        return page.page_kind() if page is not None and hasattr(page, "page_kind") else "start"
+
+    def _page_changed(self, page) -> None:
+        """A page's commands, title or position changed: the toolbar and the
+        position in the status bar follow the current page only."""
+        if page is not self._page():
+            return
+        self.toolbar.set_kind(self._kind())
+        self.toolbar.refresh()
+        count = getattr(page, "count", None)
+        self._position.setText(count.text() if count is not None else "")
+
+    #: Commands the window answers itself, whatever the page.
+    WINDOW = frozenset({
+        "new", "open-session", "close-tab", "next-tab", "previous-tab", "exit", "keys",
+        "check-updates", "about", "follow-look", "syntax-default", "keep-orig",
+        "updates-on-launch"})
+
+    def command_state(self, id_: str) -> State:
+        if id_ in self.WINDOW:
+            config = self._config
+            checked = {
+                "follow-look": bool(config.get("look.follow_file_manager")),
+                "syntax-default": bool(config.get("view.syntax")),
+                "keep-orig": bool(config.get("save.backup")),
+                "updates-on-launch": bool(config.get("updates.check_on_launch")),
+            }.get(id_)
+            return State(checked=checked)
+        if id_ in (">recent", ">theme", ">accent", ">density"):
+            return State()
+        if id_ == ">colours":
+            return HIDDEN
+        kind = self._kind()
+        if id_ in ONLY and kind not in ONLY[id_]:
+            return HIDDEN
+        page = self._page()
+        if page is None or not hasattr(page, "command_state"):
+            return HIDDEN
+        return page.command_state(id_)
+
+    def run_command(self, id_: str) -> None:
+        if id_ == "new":
+            self.new_tab()
+        elif id_ == "open-session":
+            self._browse_session()
+        elif id_ == "close-tab":
+            self.close_page()
+        elif id_ == "next-tab":
+            self._step_tab(1)
+        elif id_ == "previous-tab":
+            self._step_tab(-1)
+        elif id_ == "exit":
+            self.close()
+        elif id_ == "keys":
+            self.show_keys()
+        elif id_ == "check-updates":
+            self.updates.check(manual=True)
+        elif id_ == "about":
+            self._about()
+        elif id_ == "follow-look":
+            self._follow(not bool(self._config.get("look.follow_file_manager")))
+        elif id_ == "syntax-default":
+            self._set_syntax(not bool(self._config.get("view.syntax")))
+        elif id_ == "keep-orig":
+            self._config.set("save.backup", not bool(self._config.get("save.backup")))
+        elif id_ == "updates-on-launch":
+            self._config.set("updates.check_on_launch",
+                             not bool(self._config.get("updates.check_on_launch")))
+        else:
+            page = self._page()
+            if page is not None and hasattr(page, "run_command"):
+                page.run_command(id_)
+        page = self._page()
+        if page is not None:
+            self._page_changed(page)
+
+    def fill_menu(self, name: str, menu: QMenu) -> None:
+        if name in ("theme", "accent", "density"):
+            names, labels = {"theme": (THEMES, THEME_LABELS), "accent": (ACCENTS, ACCENT_LABELS),
+                             "density": (DENSITIES, DENSITY_LABELS)}[name]
+            group = QActionGroup(menu)
+            current = self._tokens[f"{name}_name"]
+            for value in names:
+                action = QAction(labels.get(value, value), menu)
+                action.setCheckable(True)
+                action.setChecked(value == current)
+                action.triggered.connect(lambda _c=False, k=name, n=value: self._choose(k, n))
+                group.addAction(action)
+                menu.addAction(action)
+            return
+        if name == "recent":
+            pairs = [p for p in self._config.get("recent") if isinstance(p, list) and len(p) == 2]
+            for left, right in pairs[:12]:
+                action = menu.addAction(f"{ntpath.basename(left) or left}   vs   "
+                                        f"{ntpath.basename(right) or right}")
+                action.setToolTip(f"{left}\n{right}")
+                action.triggered.connect(lambda _c=False, l=left, r=right: self.compare(l, r))
+            return
+        page = self._page()
+        if page is not None and hasattr(page, "fill_menu"):
+            page.fill_menu(name, menu)
+
+    def _browse_session(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        start = self._config.get("start.left_folder") or ""
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "Open a saved session", start, "File Compare session (*.fcsession)")
+        if path:
+            self.open_session(path.replace("/", "\\"))
 
     def _show_app_menu(self, at: QPoint) -> None:
-        menu = QMenu(self)
-        menu.addAction("New comparison\tCtrl+T", self.new_tab)
-        menu.addAction("Close tab\tCtrl+W", self.close_page)
-        menu.addSeparator()
-        for key, label, names, labels in (
-                ("theme", "Theme", THEMES, THEME_LABELS),
-                ("accent", "Accent", ACCENTS, ACCENT_LABELS),
-                ("density", "Density", DENSITIES, DENSITY_LABELS)):
-            sub = menu.addMenu(label)
-            group = QActionGroup(sub)
-            current = self._tokens[f"{key}_name"]
-            for name in names:
-                action = QAction(labels.get(name, name), sub)
-                action.setCheckable(True)
-                action.setChecked(name == current)
-                action.triggered.connect(lambda _c=False, k=key, n=name: self._choose(k, n))
-                group.addAction(action)
-                sub.addAction(action)
-        follow = menu.addAction("Follow File Manager's look")
-        follow.setCheckable(True)
-        follow.setChecked(bool(self._config.get("look.follow_file_manager")))
-        follow.triggered.connect(self._follow)
-        menu.addSeparator()
-        menu.addAction("Keys\tF1", self.show_keys)
-        menu.addSeparator()
-        menu.addAction("Check for updates", lambda: self.updates.check(manual=True))
-        automatic = menu.addAction("Check for updates on launch")
-        automatic.setCheckable(True)
-        automatic.setChecked(bool(self._config.get("updates.check_on_launch")))
-        automatic.triggered.connect(
-            lambda on: self._config.set("updates.check_on_launch", bool(on)))
-        colour = menu.addAction("Colour code by language")
-        colour.setCheckable(True)
-        colour.setChecked(bool(self._config.get("view.syntax")))
-        colour.triggered.connect(self._set_syntax)
-        backup = menu.addAction("Keep a .orig copy on first save")
-        backup.setCheckable(True)
-        backup.setChecked(bool(self._config.get("save.backup")))
-        backup.triggered.connect(lambda on: self._config.set("save.backup", bool(on)))
-        menu.addAction("About File Compare", self._about)
-        menu.addSeparator()
-        menu.addAction("Exit", self.close)
-        menu.aboutToHide.connect(menu.deleteLater)
-        menu.popup(at)
+        """The mark at the left of the title bar opens the Session menu."""
+        menu = self.menubar.menus.get("Session")
+        if menu is not None:
+            menu.popup(at)
 
     def _set_syntax(self, on: bool) -> None:
         """The default for new tabs, and every open text tab now -- except
@@ -576,7 +679,7 @@ class MainWindow(QMainWindow):
     def _shortcuts(self) -> None:
         pairs = (
             ("Ctrl+T", self.new_tab),
-            ("Ctrl+O", self.new_tab),
+            ("Ctrl+O", self._browse_session),
             ("Ctrl+W", self.close_page),
             ("Ctrl+Tab", lambda: self._step_tab(1)),
             ("Ctrl+Shift+Tab", lambda: self._step_tab(-1)),

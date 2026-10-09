@@ -125,10 +125,10 @@ def test_a_tab_colours_by_name_and_not_a_side_shown_by_structure(tmp_path):
     tab.refresh()
     assert tab.language_for(0) == "powershell"
     assert tab.view.state.syntax_spans(0, 0)
-    assert "PowerShell" in tab._language.text()  # noqa: SLF001
+    assert "PowerShell" in tab.language_label()
     tab.set_language("off")
     assert tab.view.state.syntax_spans(0, 0) is None
-    assert tab._language.text() == "Plain text"  # noqa: SLF001
+    assert tab.language_label() == "Plain text"
     tab.set_language("python")
     assert tab.language_for(1) == "python"
     session.sides[1].structured = True

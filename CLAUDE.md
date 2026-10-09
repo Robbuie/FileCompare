@@ -452,6 +452,55 @@ This is where compare tools quietly damage files. The rules:
 - Folder walks follow File Manager's listing rules: `os.scandir`, never a
   per-file `stat`, streamed in batches, both sides walked in parallel.
 
+## The window layout (decided 2026-10-09, built 1.17 to 1.21)
+
+Until 1.16 the window was File Manager's chrome with a small toolbar of bare
+icons inside each tab, and nearly every command lived on a key or in a
+right-click menu. In use it read as clunky and hard to find things in, and
+Beyond Compare's layout read better. A look pass that only changed colours
+was tried in mockups and rejected as "the same as now". What was chosen,
+after mockups of several tools' ideas:
+
+- **A real menu bar** -- Session, File, Edit, Search, View, Rules, Tools,
+  Help -- in the title bar row, beside the mark. Every command is in a menu
+  with its key written beside it. The keys stay handled by the views (see
+  Keys: a window shortcut takes the key from the find box), so a menu item
+  shows its key as text after a tab and does not register a shortcut.
+- **A labelled toolbar** under the title bar, over the tabs: larger icons
+  with a word under each, in groups, Beyond Compare's way. It belongs to the
+  window and shows the buttons for the kind of page that is current (text,
+  folder, hex and the other modes, merge, home). Buttons grey out when they
+  cannot act. The toolbar and the menus are both built from one table of
+  commands, `ui/commands.py`; a page answers `command_state(id)` and
+  `run_command(id)`, and nothing else in the window knows what a command does.
+- **Text view**: a show filter -- All, Differences, Same, Context -- that
+  folds runs of hidden lines into one "N identical lines" row you can click
+  open (1.18); a line details panel under the panes with the current line
+  of each side stacked and marked (1.18); an editable path box over each
+  side, as folder compare has had since 1.15 (1.18); three layouts -- side by
+  side, Fluid (no filler rows, curved bands joining the two sides, Meld's
+  way) and Unified (one column, GitHub's way) (1.19); and a differences
+  sidebar listing every change by where it is, with a location bar over the
+  panes, both from `core/outline.py` (1.19).
+- **Classic colours** as an option and the default: every difference in one
+  red, the changed characters bold, as Beyond Compare does. "Family" keeps
+  the amber / red / green of "Difference colours are semantic" below. The
+  semantic rule still holds for Family; Classic is a deliberate exception
+  the user chose, and it is a setting (`view.colours`), not a theme.
+- **Folder view**: the two trees stay, and a second layout, the sync list,
+  is a View choice (1.20): one list, left columns, an Action column in the
+  middle, right columns, a Result column in words, category toggles with
+  counts in the toolbar, and a plan bar that hands the copies to File
+  Manager's queue as sync does now. Total and Double Commander's
+  Synchronize Directories is the model.
+- **Home** (1.21): what a new tab opens to. Saved sessions in folders on the
+  left, a tile for each kind of compare, a quick two-path row, and recent
+  comparisons with their last result.
+
+Logix is not the centre of this application. Most of the user's L5X work is
+done in LogicControl; here L5X and L5K are one compare mode among many and
+nothing in the layout leans on them.
+
 ## Look and feel
 
 The family shares a design system. Redline PDF's `src/css/app.css` is the
@@ -470,8 +519,10 @@ compare needs. A grey that changes in Redline PDF changes in all four.
   startup, read-only, so changing the look in one changes both. If the file is
   missing or unreadable, this app's own settings apply. Never write to it.
 - **The window chrome is File Manager's**: the custom title bar from
-  `ui/winframe.py` (snap layouts, resize edges, shadow), the tab strip, the
-  status bar, the command palette on Ctrl+K, and Options on Ctrl+,.
+  `ui/winframe.py` (snap layouts, resize edges, shadow), the tab strip and
+  the status bar -- with this application's own menu bar in the title bar
+  and its labelled toolbar under it (1.17). There is no command palette or
+  Options dialog yet; the menus are where every setting is.
 - **No literal colour anywhere outside `app/theme/`.** A test fails the build
   on one, as `verify.js` does in Redline PDF.
 

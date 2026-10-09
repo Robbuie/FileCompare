@@ -125,6 +125,20 @@ class StartTab(QWidget):
     def title(self) -> str:
         return "New comparison"
 
+    def page_kind(self) -> str:
+        return "start"
+
+    def command_state(self, id_: str):
+        from app.ui.commands import HIDDEN
+
+        return HIDDEN
+
+    def run_command(self, id_: str) -> None:
+        pass
+
+    def fill_menu(self, name: str, menu) -> None:
+        pass
+
     def tooltip(self) -> str:
         return ""
 

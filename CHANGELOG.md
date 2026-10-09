@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.17.0 - a menu bar and a labelled toolbar
+
+The first of five releases that rework the window along Beyond Compare's
+lines (see "The window layout" in CLAUDE.md).
+
+- **A menu bar**: Session, File, Edit, Search, View, Rules, Tools and Help,
+  in the title bar where the name was. Every command is in a menu with its
+  key written beside it, so nothing depends on knowing the key. Items that
+  mean nothing in the tab you are on are hidden: a folder tab's View menu
+  has the folder filters, a text tab's has the text ones.
+- **A labelled toolbar** under the title bar: larger icons with a word under
+  each, in groups. It changes with the tab -- text, folders, hex and the
+  other views, a merge, the start page -- and a button greys out when it
+  cannot act. Rules, Contents, Sync and Expand do their main job when
+  clicked and open their menu from the small arrow beside them.
+- The bare icons that sat above each comparison are gone; everything they
+  did is on the toolbar. "Difference 2 of 4" (and the rung, record or byte
+  position in the other views) moved to the status bar.
+- **Folder compare's button row** became toolbar buttons: All, Diffs, Left
+  newer, Right newer and Same with their counts, Contents, Copy left, Copy
+  right, Sync, Expand and Collapse. The name filter stays, as a slim row of
+  its own over the tree, and Rules > Filter names... jumps to it.
+- **File > Left side / Right side** holds what the menu under a side's
+  encoding did: save, save as, read as, save with encoding, line endings.
+- Session > Open session... (Ctrl+O) opens a saved session directly; it
+  used to open a new tab.
+- The look (theme, accent, density, following File Manager) moved from the
+  menu behind the mark to View; the mark now opens the Session menu.
+
 ## 1.16.0 - rungs as ladder
 
 - **View: Rungs** draws a Logix comparison (.L5X or .L5K) as ladder, the

@@ -2,11 +2,12 @@
 
 The row at the top of the window that replaces the title bar and the menu bar.
 
-Three things live in it and nothing else, because a title bar is also the
+Four things live in it and nothing else, because a title bar is also the
 thing somebody drags the window by, and every control added to it is a piece of
 it that no longer drags:
 
-- the application mark at the left, which opens the application menu;
+- the application mark at the left, which opens the Session menu;
+- the menu bar (1.17), Beyond Compare's Session, File, Edit and the rest;
 - a wide button that opens a new comparison (Ctrl+T) -- File Manager's go box,
   in the same place and the same shape, until this application has a command
   palette of its own to put behind it;
@@ -98,6 +99,14 @@ class TitleBar(QWidget):
 
         self._tokens: dict[str, str] = {}
         self._maximized = False
+        self._row = row
+
+    def set_menubar(self, menubar: QWidget) -> None:
+        """1.17: the menu bar sits in this row after the mark, where the
+        application's name was -- the window's title says the name."""
+        self.app_title.hide()
+        self._row.insertWidget(1, menubar, 0, Qt.AlignVCenter)
+        self._row.insertSpacing(1, 6)
 
     def _caption(self, name: str, signal) -> QToolButton:
         button = QToolButton()

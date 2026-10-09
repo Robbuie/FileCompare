@@ -47,6 +47,7 @@ from app.io import load as io_load
 from app.io.load import LABELS
 from app.io.longpath import display
 from app.ui import glyphs
+from app.ui.commands import HIDDEN, State
 from app.ui.diffview import DiffView
 from app.ui.folderview import FolderView
 from app.ui.hexview import HexView
@@ -515,6 +516,8 @@ class CompareTab(QWidget):
     #: A pair to open in a tab of its own (from folder compare).
     openPair = Signal(str, str)
     openExtracted = Signal(str, str, object)
+    #: 1.17: something the window's toolbar or menus show has changed.
+    commandsChanged = Signal()
 
     def __init__(self, session: core.Session, tokens: dict[str, str],
                  parent: QWidget | None = None) -> None:
@@ -609,10 +612,9 @@ class CompareTab(QWidget):
         inner.addWidget(self.stack, 1)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 2, 8, 0)
+        outer.setContentsMargins(8, 6, 8, 0)
         outer.setSpacing(6)
-        self._toolrow = self._toolbar()
-        outer.addWidget(self._toolrow)
+        self._toolbar()
         outer.addWidget(self.find)
         outer.addWidget(card, 1)
 
@@ -623,125 +625,15 @@ class CompareTab(QWidget):
 
     # ------------------------------------------------------------- toolbar
 
-    def _nav(self, icon: str, tip: str, slot) -> QToolButton:
-        button = QToolButton()
-        button.setProperty("role", "nav")
-        button.setProperty("glyph", icon)
-        button.setToolTip(tip)
-        button.setFocusPolicy(Qt.NoFocus)
-        button.clicked.connect(lambda _c=False: slot())
-        self._navs.append(button)
-        return button
-
-    def _toolbar(self) -> QWidget:
-        self._navs: list[QToolButton] = []
-        row = QWidget()
-        row.setProperty("role", "toolrow")
-        box = QHBoxLayout(row)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(2)
-        self._first = self._nav("diff_first", "First difference (Home)",
-                                lambda: self._navigate("first"))
-        self._prev = self._nav("diff_prev", "Previous difference (Alt+Up)",
-                               lambda: self._navigate("previous"))
-        self._next = self._nav("diff_next", "Next difference (Alt+Down)",
-                               lambda: self._navigate("next"))
-        self._last = self._nav("diff_last", "Last difference (End)",
-                               lambda: self._navigate("last"))
-        for button in (self._first, self._prev, self._next, self._last):
-            box.addWidget(button)
+    def _toolbar(self) -> None:
+        """Before 1.17 a row of bare icons over the card. The commands moved
+        to the window's labelled toolbar and its menus, which ask
+        `command_state` and call `run_command`; what stays is the line that
+        says where you are, which the window shows in its status bar."""
         self.count = QLabel()
         self.count.setProperty("role", "count")
-        box.addWidget(self.count)
-        box.addStretch(1)
 
-        segments = QWidget()
-        segments.setProperty("role", "segments")
-        segments.setAttribute(Qt.WA_StyledBackground, True)
-        seg = QHBoxLayout(segments)
-        seg.setContentsMargins(2, 2, 2, 2)
-        seg.setSpacing(2)
-        self.rules_button = QPushButton("Rules")
-        self.rules_button.setProperty("role", "segment")
-        self.rules_button.setCheckable(True)
-        self.rules_button.setFocusPolicy(Qt.NoFocus)
-        self.rules_button.setToolTip("What counts as a difference. Ctrl+I turns them all "
-                                     "off and on.")
-        self._rules_menu = QMenu(self)
-        self._rules_menu.aboutToShow.connect(self._fill_rules_menu)
-        self.rules_button.setMenu(self._rules_menu)
-        seg.addWidget(self.rules_button)
-        self._char = QPushButton("Characters")
-        self._word = QPushButton("Words")
-        for button, mode in ((self._char, "char"), (self._word, "word")):
-            button.setProperty("role", "segment")
-            button.setCheckable(True)
-            button.setFocusPolicy(Qt.NoFocus)
-            button.setToolTip("Mark what changed inside a line by "
-                              + ("character" if mode == "char" else "word"))
-            button.clicked.connect(lambda _c=False, m=mode: self._set_intraline(m))
-            seg.addWidget(button)
-        self._structure = QPushButton("Structure")
-        self._structure.setProperty("role", "segment")
-        self._structure.setCheckable(True)
-        self._structure.setFocusPolicy(Qt.NoFocus)
-        kind = self.session.format_kind
-        self._structure.setToolTip(
-            f"Compare by {formats.names().get(kind, 'structure')}: what the file says, "
-            "not how it is laid out. Off compares and edits the plain text.")
-        self._structure.clicked.connect(lambda on: self.session.set_structure(bool(on)))
-        self._structure.setVisible(kind != formats.PLAIN)
-        seg.insertWidget(0, self._structure)
-        box.addWidget(segments)
-        self._text_segments = segments
-        self._view_button = QToolButton()
-        self._view_button.setProperty("role", "retry")
-        self._view_button.setFocusPolicy(Qt.NoFocus)
-        self._view_button.setPopupMode(QToolButton.InstantPopup)
-        self._view_button.setToolTip("Show this pair as text, as bytes, or as pictures")
-        self._view_menu = QMenu(self)
-        self._view_menu.aboutToShow.connect(self._fill_view_menu)
-        self._view_button.setMenu(self._view_menu)
-        # 1.1: the language the text is coloured as. Detected from the
-        # file's name; the menu picks another, or none.
-        self._language = QToolButton()
-        self._language.setProperty("role", "retry")
-        self._language.setFocusPolicy(Qt.NoFocus)
-        self._language.setPopupMode(QToolButton.InstantPopup)
-        self._language.setToolTip("The language the text is coloured as")
-        self._language_menu = QMenu(self)
-        self._language_menu.aboutToShow.connect(self._fill_language_menu)
-        self._language.setMenu(self._language_menu)
-        box.addSpacing(6)
-        box.addWidget(self._language)
-        box.addSpacing(2)
-        box.addWidget(self._view_button)
-        box.addSpacing(8)
-        self._copy_left = self._nav("copy_left",
-                                    "Copy the selected lines, or this difference, to the left "
-                                    "(Alt+Left)", lambda: self._command("copy-left"))
-        self._copy_right = self._nav("copy_right",
-                                     "Copy the selected lines, or this difference, to the right "
-                                     "(Alt+Right)", lambda: self._command("copy-right"))
-        self._undo = self._nav("undo", "Undo on this side (Ctrl+Z)", lambda: self._command("undo"))
-        self._redo = self._nav("redo", "Redo on this side (Ctrl+Y)", lambda: self._command("redo"))
-        self._save = self._nav("save", "Save this side (Ctrl+S); both with Ctrl+Shift+S",
-                               lambda: self._command("save"))
-        self._edit_buttons = (self._copy_left, self._copy_right, self._undo, self._redo,
-                              self._save)
-        for button in self._edit_buttons:
-            box.addWidget(button)
-        box.addSpacing(8)
-        self._swap = self._nav("swap", "Swap sides (Ctrl+U)", self.session.swap)
-        self._reload = self._nav("refresh", "Compare again from disk (Ctrl+R)",
-                                 self.session.reload)
-        box.addWidget(self._swap)
-        box.addWidget(self._reload)
-        return row
-
-    def _fill_rules_menu(self) -> None:
-        menu = self._rules_menu
-        menu.clear()
+    def _fill_whitespace_menu(self, menu: QMenu) -> None:
         rules = self.session.rules
         for value in WHITESPACE:
             action = menu.addAction(WHITESPACE_LABELS[value])
@@ -749,32 +641,10 @@ class CompareTab(QWidget):
             action.setChecked(rules.whitespace == value)
             action.triggered.connect(
                 lambda _c=False, v=value: self._change_rules(whitespace=v))
-        menu.addSeparator()
-        case = menu.addAction("Ignore case")
-        case.setCheckable(True)
-        case.setChecked(rules.case)
-        case.triggered.connect(lambda c: self._change_rules(case=c))
-        blank = menu.addAction("Ignore blank lines")
-        blank.setCheckable(True)
-        blank.setChecked(rules.blank_lines)
-        blank.triggered.connect(lambda c: self._change_rules(blank_lines=c))
-        comments = menu.addAction("Ignore comments" + (
-            f"  ({' '.join(m.strip() for m in rules.markers)})" if rules.markers
-            else "  (not known for this file type)"))
-        comments.setCheckable(True)
-        comments.setChecked(rules.comments)
-        comments.setEnabled(bool(rules.markers))
-        comments.triggered.connect(lambda c: self._change_rules(comments=c))
-        if rules.patterns:
-            menu.addSeparator()
-            for pattern in rules.patterns:
-                item = menu.addAction(f"Unimportant: {pattern}")
-                item.setEnabled(False)
-        menu.addSeparator()
-        master = menu.addAction("Rules on\tCtrl+I")
-        master.setCheckable(True)
-        master.setChecked(rules.enabled)
-        master.triggered.connect(lambda _c=False: self._command("rules"))
+
+    def _fill_patterns_menu(self, menu: QMenu) -> None:
+        for pattern in self.session.rules.patterns:
+            menu.addAction(pattern).setEnabled(False)
 
     def _change_rules(self, **changes) -> None:
         from dataclasses import replace
@@ -1132,9 +1002,17 @@ class CompareTab(QWidget):
         self.session.read_as(index, encoding)
 
     def _side_menu(self, index: int) -> None:
+        menu = QMenu(self)
+        self._fill_side_menu(index, menu)
+        head = self.heads[index]
+        menu.aboutToHide.connect(menu.deleteLater)
+        menu.popup(head.facts.mapToGlobal(head.facts.rect().bottomLeft()))
+
+    def _fill_side_menu(self, index: int, menu: QMenu) -> None:
+        """Saving, reading as and line endings for one side: the menu under
+        the side's facts, and File > Left side / Right side (1.17)."""
         s = self.session
         side = s.sides[index]
-        menu = QMenu(self)
         save = menu.addAction("Save\tCtrl+S", lambda: self.save_side(index))
         save.setEnabled(side.editable and (side.dirty or s.encoding_changed(index)))
         menu.addAction("Save as...", lambda: self.save_side_as(index)).setEnabled(side.doc is not None)
@@ -1176,9 +1054,6 @@ class CompareTab(QWidget):
         menu.addSeparator()
         menu.addAction("Copy path", lambda: QApplication.clipboard().setText(display(side.path)))
         menu.addAction("Reload from disk", lambda: self._reload_side(index))
-        head = self.heads[index]
-        menu.aboutToHide.connect(menu.deleteLater)
-        menu.popup(head.facts.mapToGlobal(head.facts.rect().bottomLeft()))
 
     # ----------------------------------------------------------------- find
 
@@ -1238,7 +1113,7 @@ class CompareTab(QWidget):
     def apply_tokens(self, tokens: dict[str, str]) -> None:
         self._tokens = tokens
         ratio = float(self.devicePixelRatioF() or 1.0)
-        for button in self._navs + [self.find.previous, self.find.next, self.find.close_button]:
+        for button in (self.find.previous, self.find.next, self.find.close_button):
             button.setIcon(glyphs.icon(button.property("glyph"), colour=tokens["txt_1"],
                                        muted=tokens["txt_2"], size=16, ratio=ratio))
         self.view.apply_tokens(tokens)
@@ -1304,19 +1179,6 @@ class CompareTab(QWidget):
             self._shown_result = None
             self.stack.setCurrentWidget(self.message)
             self.message.say(*self._explain(kind))
-        current = self.stack.currentWidget()
-        self._toolrow.setVisible(current in (self.view, self.message, self.hex, self.images,
-                                             self.table, self.rungs))
-        texty = current in (self.view, self.message)
-        self._text_segments.setVisible(texty)
-        for button in self._edit_buttons:
-            button.setVisible(texty)
-        for button in (self._first, self._prev, self._next, self._last):
-            button.setVisible(current is not self.images)
-        self._view_button.setText("View: " + VIEW_LABELS.get(shown, "Text"))
-        self._view_button.setVisible(kind in (core.TEXT, core.BINARY))
-        self._language.setVisible(current is self.view)
-        self._language.setText(self._language_label())
         self._update_position()
         self.titleChanged.emit()
 
@@ -1389,7 +1251,7 @@ class CompareTab(QWidget):
         lines = s.result_lines[side]
         return syntax.detect(s.sides[side].path, lines[0] if lines else "")
 
-    def _language_label(self) -> str:
+    def language_label(self) -> str:
         if self.language == "off":
             return "Plain text"
         keys = {self.language_for(0), self.language_for(1)} - {""}
@@ -1412,15 +1274,13 @@ class CompareTab(QWidget):
                 self.view.set_syntax(side, lines, syntax.highlight(lines, key))
             else:
                 self._syntax_requests[side] = s._loader.submit(_syntax_job, lines, key)
-        self._language.setText(self._language_label())
+        self.commandsChanged.emit()
 
     def set_language(self, language: str) -> None:
         self.language = language
         self._colour()
 
-    def _fill_language_menu(self) -> None:
-        menu = self._language_menu
-        menu.clear()
+    def _fill_language_menu(self, menu: QMenu) -> None:
         s = self.session
         detected = {syntax.detect(side.path, (lines[0] if lines else ""))
                     for side, lines in zip(s.sides, s.result_lines)} - {""}
@@ -1441,11 +1301,10 @@ class CompareTab(QWidget):
             action.setChecked(self.language == key)
             action.triggered.connect(lambda _c=False, k=key: self.set_language(k))
 
-    def _fill_view_menu(self) -> None:
-        self._view_menu.clear()
+    def _fill_view_menu(self, menu: QMenu) -> None:
         shown = self.shown_mode()
         for mode in self.available_modes():
-            action = self._view_menu.addAction(VIEW_LABELS[mode])
+            action = menu.addAction(VIEW_LABELS[mode])
             action.setCheckable(True)
             action.setChecked(mode == shown)
             action.triggered.connect(lambda _c=False, m=mode: self.set_mode(m))
@@ -1589,6 +1448,7 @@ class CompareTab(QWidget):
             self.folders.command.connect(self._command)
             self.folders.split.connect(self._folder_split)
             self.folders.sideChanged.connect(self._folder_side)
+            self.folders.commandsChanged.connect(self.commandsChanged)
             self._folder_side(self.folders.side)
             self.stack.addWidget(self.folders)
             folder.start()
@@ -1741,14 +1601,6 @@ class CompareTab(QWidget):
         return "", ""
 
     def _sync_toggles(self) -> None:
-        rules = self.session.rules
-        self.rules_button.setChecked(rules.enabled and rules.any)
-        self.rules_button.setText("Rules" if not (rules.enabled and rules.any)
-                                  else "Rules on")
-        self._structure.setChecked(self.session.structure)
-        mode = self.session.options.intraline
-        self._char.setChecked(mode == "char")
-        self._word.setChecked(mode == "word")
         focused = self.folders.side if self.folders is not None else self.view.focused_side
         self.heads[0].set_focused(focused == 0)
         self.heads[1].set_focused(focused == 1)
@@ -1757,8 +1609,6 @@ class CompareTab(QWidget):
         s = self.session
         if self.stack.currentWidget() is self.rungs:
             current, total = self.rungs.position()
-            for button in (self._first, self._prev, self._next, self._last):
-                button.setEnabled(total > 0)
             if s.result is None:
                 text = "Comparing..."
             elif not total:
@@ -1776,19 +1626,17 @@ class CompareTab(QWidget):
                                    else "")
             self.count.style().unpolish(self.count)
             self.count.style().polish(self.count)
+            self.commandsChanged.emit()
             return
         if self.stack.currentWidget() is self.table:
             result = self.table.model.result
             total = len(result.differences) if result else 0
-            for button in (self._first, self._prev, self._next, self._last):
-                button.setEnabled(total > 0)
             self.count.setText(f"{total:,} record{'s' if total != 1 else ''} differ"
                                if result else "Comparing...")
+            self.commandsChanged.emit()
             return
         if self.stack.currentWidget() is self.hex:
             current, total = self.hex.position()
-            for button in (self._first, self._prev, self._next, self._last):
-                button.setEnabled(total > 0)
             result = self.hex.result
             if result is None:
                 text = "Comparing bytes..."
@@ -1802,20 +1650,9 @@ class CompareTab(QWidget):
                 if result.left_size != result.right_size:
                     text += (f"  ·  {result.left_size:,} and {result.right_size:,} bytes")
             self.count.setText(text)
+            self.commandsChanged.emit()
             return
         result = s.result if s.kind == core.TEXT else None
-        has = bool(result and result.differences)
-        for button in (self._first, self._prev, self._next, self._last):
-            button.setEnabled(has)
-        side = s.sides[self.view.focused_side]
-        on_block = has and (self.view.state.current is not None
-                            or self.view.state.copyable() is not None)
-        self._copy_left.setEnabled(on_block and s.sides[0].editable)
-        self._copy_right.setEnabled(on_block and s.sides[1].editable)
-        self._undo.setEnabled(side.doc is not None and side.doc.can_undo)
-        self._redo.setEnabled(side.doc is not None and side.doc.can_redo)
-        self._save.setEnabled(side.editable and (side.dirty or s.encoding_changed(
-            self.view.focused_side)))
         state = ""
         if result is None:
             text = ""
@@ -1847,6 +1684,7 @@ class CompareTab(QWidget):
         self.heads[1].set_focused(focused == 1)
         if result is not None:
             self.status.emit(self._status_line(result))
+        self.commandsChanged.emit()
 
     def _align(self) -> None:
         """Ctrl+L, twice: hold a line on one side opposite a line on the
@@ -1965,6 +1803,177 @@ class CompareTab(QWidget):
             self.session.format_note else ""
         return (f"{lines}    {self.session.rules.describe()}{note}    "
                 f"compared in {result.elapsed * 1000:.0f} ms")
+
+    # ------------------------------------------------- commands (1.17)
+
+    #: Commands that go straight to `_command` with the same name.
+    PLAIN_COMMANDS = frozenset({
+        "swap", "reload", "copy-left", "copy-right", "copy-all-left", "copy-all-right",
+        "undo", "redo", "save", "save-all", "find", "find-next", "find-previous",
+        "copy-text", "report", "save-session", "align", "unalign", "move-partner",
+        "select-all", "edit", "insert-line", "delete-lines"})
+
+    def page_kind(self) -> str:
+        """Which toolbar the window shows: "text", "folder" or "other"."""
+        current = self.stack.currentWidget()
+        if self.folders is not None and current is self.folders:
+            return "folder"
+        if current in (self.view, self.message, self.handoff):
+            return "text"
+        return "other"
+
+    def command_state(self, id_: str) -> State:
+        s = self.session
+        kind = self.page_kind()
+        if id_ in ("swap", "reload", "save-session", "copy-paths"):
+            return State()
+        if kind == "folder":
+            answer = self.folders.command_state(id_)
+            return answer if answer is not None else HIDDEN
+        current = self.stack.currentWidget()
+        text = current is self.view
+        result = s.result if s.kind == core.TEXT else None
+        has = bool(result and result.differences)
+        focused = self.view.focused_side
+        side = s.sides[focused]
+        if id_ in ("compare-as", ">compare-as-menu"):
+            if s.kind not in (core.TEXT, core.BINARY):
+                return HIDDEN
+            return State(label=VIEW_LABELS.get(self.shown_mode(), "Text")
+                         if id_ == "compare-as" else None)
+        if id_ in ("previous", "next"):
+            if current is self.images:
+                return HIDDEN
+            if current is self.rungs:
+                return State(enabled=self.rungs.position()[1] > 0)
+            if current is self.hex:
+                return State(enabled=self.hex.position()[1] > 0)
+            if current is self.table:
+                table = self.table.model.result
+                return State(enabled=bool(table and table.differences))
+            return State(enabled=has)
+        if not text and kind == "text":
+            # Still reading, a message, or a sibling's pair: the text
+            # commands are there, and have nothing to act on yet.
+            if id_ == "structure":
+                return State(enabled=False, visible=s.format_kind != formats.PLAIN)
+            if id_ in (">side-left", ">side-right", ">syntax", ">whitespace", ">patterns"):
+                return HIDDEN
+            return State(enabled=False) if id_ in self.TEXT_IDS else HIDDEN
+        if kind != "text":
+            return HIDDEN
+        rules = s.rules
+        editable = (s.sides[0].editable, s.sides[1].editable)
+        on_block = has and (self.view.state.current is not None
+                            or self.view.state.copyable() is not None)
+        if id_ == "structure":
+            return State(checked=s.structure, visible=s.format_kind != formats.PLAIN,
+                         tip=f"Compare by {formats.names().get(s.format_kind, 'structure')}: "
+                             "what the file says, not how it is laid out. Off compares and "
+                             "edits the plain text.")
+        if id_ == "rules":
+            on = rules.enabled and rules.any
+            return State(checked=on, label="Rules on" if on else None)
+        if id_ == "ignore-case":
+            return State(checked=rules.case)
+        if id_ == "ignore-blank":
+            return State(checked=rules.blank_lines)
+        if id_ == "ignore-comments":
+            return State(checked=rules.comments, enabled=bool(rules.markers),
+                         label="Ignore comments" + (
+                             f"  ({' '.join(m.strip() for m in rules.markers)})"
+                             if rules.markers else "  (not known for this file type)"))
+        if id_ == "mark-chars":
+            return State(checked=s.options.intraline == "char")
+        if id_ == "mark-words":
+            return State(checked=s.options.intraline == "word")
+        if id_ == "copy-left":
+            return State(enabled=on_block and editable[0])
+        if id_ == "copy-right":
+            return State(enabled=on_block and editable[1])
+        if id_ == "copy-all-left":
+            return State(enabled=has and editable[0])
+        if id_ == "copy-all-right":
+            return State(enabled=has and editable[1])
+        if id_ in ("edit", "insert-line", "delete-lines"):
+            return State(enabled=side.editable and bool(self.view.state.rows))
+        if id_ == "undo":
+            return State(enabled=side.doc is not None and side.doc.can_undo)
+        if id_ == "redo":
+            return State(enabled=side.doc is not None and side.doc.can_redo)
+        if id_ == "save":
+            return State(enabled=side.editable and (side.dirty or s.encoding_changed(focused)))
+        if id_ == "save-all":
+            return State(enabled=s.dirty)
+        if id_ == "save-as":
+            return State(enabled=side.doc is not None)
+        if id_ in ("first", "last", "move-partner"):
+            return State(enabled=has)
+        if id_ in ("report", "find", "find-next", "find-previous", "copy-text", "select-all",
+                   "align", "unalign"):
+            return State(enabled=result is not None)
+        if id_ in (">side-left", ">side-right"):
+            index = 0 if id_ == ">side-left" else 1
+            return State(enabled=s.sides[index].doc is not None)
+        if id_ in (">syntax", ">whitespace"):
+            return State()
+        if id_ == ">patterns":
+            return State(visible=bool(rules.patterns))
+        return HIDDEN
+
+    #: The text commands shown (greyed) while a text tab has nothing to show.
+    TEXT_IDS = frozenset({
+        "rules", "copy-left", "copy-right", "edit", "save", "undo", "redo", "find",
+        "copy-all-left", "copy-all-right", "first", "last", "report", "mark-chars",
+        "mark-words", "ignore-case", "ignore-blank", "ignore-comments", "copy-text",
+        "select-all", "save-all", "save-as", "insert-line", "delete-lines", "align",
+        "unalign", "move-partner", "find-next", "find-previous"})
+
+    def run_command(self, id_: str) -> None:
+        s = self.session
+        if self.page_kind() == "folder" and self.folders.run_command(id_):
+            return
+        if id_ in ("previous", "next", "first", "last"):
+            self._navigate(id_)
+        elif id_ == "structure":
+            s.set_structure(not s.structure)
+        elif id_ == "rules":
+            self._command("rules")
+        elif id_ == "ignore-case":
+            self._change_rules(case=not s.rules.case)
+        elif id_ == "ignore-blank":
+            self._change_rules(blank_lines=not s.rules.blank_lines)
+        elif id_ == "ignore-comments":
+            self._change_rules(comments=not s.rules.comments)
+        elif id_ == "mark-chars":
+            self._set_intraline("char")
+        elif id_ == "mark-words":
+            self._set_intraline("word")
+        elif id_ == "save-as":
+            self.save_side_as(self.view.focused_side)
+        elif id_ == "copy-paths":
+            QApplication.clipboard().setText(
+                "\n".join(display(side.path) for side in s.sides))
+            self.status.emit("Copied both paths")
+        elif id_ in self.PLAIN_COMMANDS:
+            self._command(id_)
+        else:
+            return
+        if self.page_kind() != "folder":
+            self.focus_view()
+        self.commandsChanged.emit()
+
+    def fill_menu(self, name: str, menu: QMenu) -> None:
+        if name in ("side-left", "side-right"):
+            self._fill_side_menu(0 if name == "side-left" else 1, menu)
+        elif name == "syntax":
+            self._fill_language_menu(menu)
+        elif name == "whitespace":
+            self._fill_whitespace_menu(menu)
+        elif name == "patterns":
+            self._fill_patterns_menu(menu)
+        elif name == "compare-as-menu":
+            self._fill_view_menu(menu)
 
     def focus_view(self) -> None:
         current = self.stack.currentWidget()

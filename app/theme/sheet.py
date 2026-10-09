@@ -210,6 +210,39 @@ QLabel[role="keycap"] {{
     padding: 0px 5px;
 }}
 
+/* ------------------------------------------------- menu bar, toolbar (1.17) */
+
+QMenuBar[role="menubar"] {{ background: transparent; border: none; padding: 0px; }}
+QMenuBar[role="menubar"]::item {{
+    background: transparent;
+    color: {txt_0};
+    padding: 5px 9px;
+    border-radius: {radius_sm};
+}}
+QMenuBar[role="menubar"]::item:selected {{ background: {bg_3}; }}
+QMenuBar[role="menubar"]::item:pressed {{ background: {accent_soft}; color: {accent_text}; }}
+QWidget[role="toolbar"] {{ background: {bg_1}; border-bottom: 1px solid {line_soft}; }}
+QToolButton[role="tool"] {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: {radius};
+    color: {txt_0};
+    padding: 3px 6px 2px 6px;
+    min-width: 46px;
+    min-height: 0px;
+    font-size: {tool_font};
+}}
+QToolButton[role="tool"][menu="true"] {{ padding-right: 16px; }}
+QToolButton[role="tool"]:hover {{ background: {bg_3}; }}
+QToolButton[role="tool"]:pressed {{ background: {bg_4}; }}
+QToolButton[role="tool"]:checked {{ background: {accent_soft}; border: 1px solid {accent_line}; color: {accent_text}; }}
+QToolButton[role="tool"]:disabled {{ color: {txt_2}; background: transparent; }}
+QToolButton[role="tool"]::menu-indicator {{ image: none; width: 0px; }}
+QToolButton[role="tool"]::menu-button {{ border: none; background: transparent; width: 14px; }}
+QToolButton[role="tool"]::menu-arrow {{ image: none; }}
+QFrame[role="tooldiv"] {{ background: {line}; border: none; margin: 6px 0px; }}
+QLabel[role="position"] {{ color: {txt_1}; padding: 0px 10px; }}
+
 /* ----------------------------------------------------------------- dialogs */
 
 QDialog QLabel {{ background: transparent; color: {txt_0}; }}
@@ -394,6 +427,9 @@ def tokens(
     is one place that knows how a tint is derived.
     """
     values = qss.build(theme, accent, density)
+    # 1.17: the word under a toolbar icon, a step under the interface size.
+    ui = float(str(values.get("ui_font", "13px")).rstrip("px") or 13)
+    values["tool_font"] = f"{max(9.0, ui - 1.5):g}px"
     values.update(diff.build(values))
     values.update(syntax.build(values))
     return values
