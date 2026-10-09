@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.19.0 - a differences list, Fluid and Unified
+
+- **A list of every difference** beside the files (the List button, View >
+  Differences list, or Ctrl+Shift+D). Each one says where it is and what it
+  is in a few words -- "Line 10: copy to copy2", "Only on the left: ..." --
+  under the function, class or section it is in: `def copy_job(name)`,
+  `class Cell > Add(int a, int b)`, `[Network]`, `Sub Button1_Click`. A box
+  at the top filters it by any word. Ignored differences are listed last,
+  under their own heading. Click one to go to it; the one you are on is
+  highlighted as you step through.
+- **A location bar** over the panes says where the cursor is: the file, the
+  section, the line.
+- Sections are found for Python, YAML, C, C++, C#, Java, JavaScript,
+  TypeScript, Go, Rust and the other brace languages, VB.NET and VBScript,
+  Structured Text, L5K, INI, TOML, Markdown, PowerShell, shell scripts,
+  batch labels and SQL. Any other file is listed by line, without sections.
+- **Three layouts** on the toolbar and in the View menu:
+  - **Side by side**, as before.
+  - **Fluid**: each side's lines one after another with no filler rows,
+    and curved bands across the middle joining each difference to its other
+    side, as Meld and Araxis draw it. The arrows on a band copy it.
+  - **Unified** (Ctrl+Shift+I): one column, each difference under a heading
+    with where it is, the old lines marked "-" and the new marked "+", as a
+    patch or GitHub shows a change. Diffs and Context work here too.
+  Editing and aligning lines are in Side by side; the other two say so.
+  The layout you pick is kept.
+
 ## 1.18.0 - show only the differences, line details, and a path box per file
 
 - **All, Diffs, Same, Context** on the toolbar and in the View menu. Diffs

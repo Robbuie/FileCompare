@@ -179,6 +179,10 @@ class Options:
     context: int = 3
     details: bool = True
     file_history: tuple[str, ...] = ()
+    #: 1.19: the differences list beside the panes, and the text layout:
+    #: "sbs" (side by side), "fluid" or "unified".
+    sidebar: bool = True
+    layout: str = "sbs"
 
 
 class Session(QObject):

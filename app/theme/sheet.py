@@ -243,6 +243,23 @@ QToolButton[role="tool"]::menu-arrow {{ image: none; }}
 QFrame[role="tooldiv"] {{ background: {line}; border: none; margin: 6px 0px; }}
 QLabel[role="position"] {{ color: {txt_1}; padding: 0px 10px; }}
 
+/* 1.19: the differences list and the location bar. */
+QWidget[role="sidebar"] {{ background: transparent; }}
+QTreeWidget[role="difflist"] {{
+    background: {bg_2};
+    border: 1px solid {line_soft};
+    border-radius: {radius_lg};
+    outline: none;
+    padding: 4px 0px;
+}}
+QLabel[role="location"] {{
+    background: {bg_1};
+    color: {txt_1};
+    border-bottom: 1px solid {line_soft};
+    padding: 4px 12px;
+}}
+QLineEdit[role="pathbox"] {{ background: {bg_2}; border: 1px solid {line}; }}
+
 /* ----------------------------------------------------------------- dialogs */
 
 QDialog QLabel {{ background: transparent; color: {txt_0}; }}

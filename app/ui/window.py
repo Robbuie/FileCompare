@@ -79,6 +79,8 @@ Ctrl+Alt+S                save this comparison's setup as a session file
 Ctrl+U                    swap sides
 Ctrl+R                    compare again from disk
 Ctrl+I                    rules off and on
+Ctrl+Shift+I              Unified (one column) on and off
+Ctrl+Shift+D              the differences list
 Ctrl+T                    new comparison
 Ctrl+W                    close this tab
 Ctrl+Tab / Ctrl+Shift+Tab next, previous tab
@@ -318,6 +320,8 @@ class MainWindow(QMainWindow):
             show=str(self._config.get("view.show") or "all"),
             context=int(self._config.get("view.context") or 3),
             details=bool(self._config.get("view.details")),
+            sidebar=bool(self._config.get("view.sidebar")),
+            layout=str(self._config.get("view.layout") or "sbs"),
             file_history=self._file_history(),
         )
         if saved is not None:

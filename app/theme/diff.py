@@ -101,4 +101,9 @@ def build(tokens: dict[str, str], palette: str = "classic") -> dict[str, str]:
     # A merge's taken lines are green in either palette: there "added" is
     # what was chosen, not a difference.
     out["merge_taken_row"] = qss.mix(HUES["add"], surface, row)
+    # Unified's "+" lines (1.19) are green in either palette, so the two
+    # halves of a change can be told apart in one column.
+    out["uni_add_bar"] = qss.rgb(HUES["add"])
+    out["uni_add_row"] = qss.mix(HUES["add"], surface, row)
+    out["uni_add_mark"] = qss.mix(HUES["add"], surface, mark)
     return out

@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QStackedWidget,
     QToolButton,
     QVBoxLayout,
@@ -48,6 +49,7 @@ from app.io.load import LABELS
 from app.io.longpath import display
 from app.ui import glyphs
 from app.ui.commands import HIDDEN, State
+from app.ui.diffsidebar import DiffSidebar, Entry
 from app.ui.diffview import DiffView
 from app.ui.folderview import FolderView
 from app.ui.hexview import HexView
@@ -634,6 +636,7 @@ class CompareTab(QWidget):
             head.browseRequested.connect(lambda i=index: self._browse_side(i))
         self.view.set_show(session.options.show, session.options.context)
         self.view.set_details(session.options.details)
+        self.view.set_layout(session.options.layout)
         heads = QHBoxLayout()
         heads.setContentsMargins(0, 0, 0, 0)
         heads.setSpacing(0)
@@ -651,13 +654,28 @@ class CompareTab(QWidget):
         inner.setContentsMargins(1, 1, 1, 1)
         inner.setSpacing(0)
         inner.addLayout(heads)
+        inner.addWidget(self.location)
         inner.addWidget(self.stack, 1)
+        # 1.19: every difference in a list beside the card.
+        self.sidebar = DiffSidebar()
+        self.sidebar.goTo.connect(self._go_block)
+        self._sidebar_on = bool(session.options.sidebar)
+        self._outline_for = None
+        self._sections: tuple = (None, None)
+        self.split = QSplitter(Qt.Horizontal)
+        self.split.setChildrenCollapsible(False)
+        self.split.addWidget(self.sidebar)
+        self.split.addWidget(card)
+        self.split.setStretchFactor(0, 0)
+        self.split.setStretchFactor(1, 1)
+        self.split.setSizes([270, 1100])
+        self.sidebar.hide()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 6, 8, 0)
         outer.setSpacing(6)
         outer.addWidget(self.find)
-        outer.addWidget(card, 1)
+        outer.addWidget(self.split, 1)
 
         session.changed.connect(self.refresh)
         session.saved.connect(self._saved)
@@ -673,6 +691,10 @@ class CompareTab(QWidget):
         says where you are, which the window shows in its status bar."""
         self.count = QLabel()
         self.count.setProperty("role", "count")
+        # 1.19: where the cursor is in the file's outline, over the panes.
+        self.location = QLabel()
+        self.location.setProperty("role", "location")
+        self.location.hide()
 
     def _fill_whitespace_menu(self, menu: QMenu) -> None:
         rules = self.session.rules
@@ -756,6 +778,14 @@ class CompareTab(QWidget):
         elif name == "select-all":
             if self.view.state.rows:
                 self.view.select_rows(side, 0, len(self.view.state.rows))
+        elif name == "toggle-unified":
+            self.run_command("layout-sbs" if self.view.state.layout == "unified"
+                             else "layout-unified")
+        elif name == "sidebar":
+            self.run_command("sidebar")
+        elif name in ("edit", "insert-line", "delete-lines", "align") \
+                and self.view.state.layout != "sbs":
+            self.status.emit("Editing and aligning are in Side by side (View > Side by side)")
         elif name == "edit":
             if self._can_edit(side) and self._current_or_say():
                 self.view.begin_edit()
@@ -1166,6 +1196,7 @@ class CompareTab(QWidget):
         self.rungs.apply_tokens(tokens)
         self.images.apply_tokens(tokens)
         self.table.apply_tokens(tokens)
+        self.sidebar.apply_tokens(tokens)
         if self.folders is None:
             self._head_spacer.setFixedWidth(self.view.gutter.width())
 
@@ -1210,6 +1241,7 @@ class CompareTab(QWidget):
                 left, right = s.result_lines
                 self.view.set_comparison(s.result, left, right, s.options.intraline, s.pins)
                 self._colour()
+                self._outline_for = None
                 if self.find.isVisible():
                     self._find_changed()
             self.stack.setCurrentWidget(self.view)
@@ -1220,8 +1252,145 @@ class CompareTab(QWidget):
             self._shown_result = None
             self.stack.setCurrentWidget(self.message)
             self.message.say(*self._explain(kind))
+        self._show_sidebar()
+        self._show_headings()
         self._update_position()
         self.titleChanged.emit()
+
+    # ------------------------------------------- differences list (1.19)
+
+    def _show_sidebar(self) -> None:
+        text = self.stack.currentWidget() is self.view and self.session.result is not None
+        self.sidebar.setVisible(text and self._sidebar_on)
+        if text and self._sidebar_on:
+            self._fill_sidebar()
+
+    def _outline(self) -> tuple:
+        """Per side, the section each line shown is in, or None. Crumbs from a
+        format comparer when there are some; the outline otherwise."""
+        from app.core import outline
+
+        s = self.session
+        key = (id(s.result), self.language)
+        if self._outline_for == key:
+            return self._sections
+        self._outline_for = key
+        out = []
+        crumbs = s.result_crumbs if s.structure else ([], [])
+        for side in (0, 1):
+            lines = s.result_lines[side]
+            if crumbs and crumbs[side] and any(crumbs[side]):
+                out.append(list(crumbs[side]))
+                continue
+            language = self.language_for(side) or syntax.detect(
+                s.sides[side].path, lines[0] if lines else "")
+            out.append(outline.sections(lines, language) if language else None)
+        self._sections = tuple(out)
+        self._sidebar_key = None
+        return self._sections
+
+    #: Past this many differences the list is cut, with a line saying so.
+    LIST_LIMIT = 3000
+
+    def _fill_sidebar(self) -> None:
+        from app.core import outline
+        from app.core.diff import align as A
+
+        s = self.session
+        result = s.result
+        if result is None or s.kind != core.TEXT:
+            return
+        key = (id(result), self.language)
+        if getattr(self, "_sidebar_key", None) == key:
+            return
+        self._sidebar_key = key
+        known, summaries = self._summaries()
+        groups: dict[str, list[Entry]] = {}
+        order: list[str] = []
+        ignored: list[Entry] = []
+        for index, (heading, title, detail) in enumerate(summaries):
+            block = result.blocks[index]
+            bar = "diff_ignored_bar" if not block.significant else (
+                "diff_moved_bar" if block.move >= 0 else {
+                    A.DELETED: "diff_del_bar", A.INSERTED: "diff_add_bar"}.get(
+                    block.kind, "diff_chg_bar"))
+            entry = Entry(index, title, detail, bar)
+            if not block.significant:
+                ignored.append(entry)
+                continue
+            if heading not in groups:
+                groups[heading] = []
+                order.append(heading)
+            groups[heading].append(entry)
+        listed = [(h, groups[h]) for h in order]
+        if ignored:
+            listed.append(("Ignored by rules", ignored))
+        if len(result.blocks) > self.LIST_LIMIT:
+            listed.append((f"First {self.LIST_LIMIT:,} of {len(result.blocks):,} listed", []))
+        self.sidebar.set_entries(key, listed)
+
+    def _summaries(self) -> tuple[bool, list[tuple[str, str, str]]]:
+        """Per difference: (section, where, what), for the list and for
+        Unified's headings. Kept per comparison and language."""
+        from app.core import outline
+
+        s = self.session
+        key = (id(s.result), self.language)
+        cached = getattr(self, "_summaries_for", None)
+        if cached is not None and cached[0] == key:
+            return cached[1], cached[2]
+        sections = self._outline()
+        known = any(x is not None for x in sections)
+        left, right = s.result_lines
+        out = []
+        for index, block in enumerate(s.result.blocks[:self.LIST_LIMIT]):
+            title, detail = outline.summary(s.result, index, left, right)
+            heading = outline.section_of(s.result.rows[block.start:block.end], sections) \
+                if known else ""
+            out.append((heading or ("Top of file" if known else "Differences"), title, detail))
+        self._summaries_for = (key, known, out)
+        return known, out
+
+    def _show_headings(self) -> None:
+        """Unified's heading over each difference (1.19)."""
+        s = self.session
+        if self.view.state.layout != "unified" or s.result is None or s.kind != core.TEXT:
+            return
+        known, summaries = self._summaries()
+        headings = {}
+        for index, (section, title, detail) in enumerate(summaries):
+            headings[index] = (f"{section}     {title}: {detail}" if known
+                               else f"{title}: {detail}")
+        self.view.set_headings(headings)
+
+    def _go_block(self, block: int) -> None:
+        self.view.go(block)
+        self.view.setFocus(Qt.OtherFocusReason)
+
+    def _show_location(self) -> None:
+        """file > section > line, for the line under the cursor (1.19)."""
+        s = self.session
+        if self.stack.currentWidget() is not self.view or s.result is None \
+                or s.kind != core.TEXT or not self.view.state.rows:
+            self.location.hide()
+            return
+        sections = self._outline()
+        state = self.view.state
+        side = state.side
+        row = max(0, min(state.cursor, len(state.rows) - 1))
+        index = state.rows[row][side]
+        if index == align.NONE:
+            side = 1 - side
+            index = state.rows[row][side]
+        names = sections[side] if 0 <= side < 2 else None
+        if not names or index == align.NONE or index >= len(names):
+            self.location.hide()
+            return
+        name = ntpath.basename(display(s.sides[side].path)) or ("left", "right")[side]
+        parts = [name] + [p for p in names[index].split(" \u203a ") if p] + \
+            [f"line {index + 1:,}"]
+        self.location.setText("   \u203a   ".join(parts))
+        self.location.show()
 
     # --------------------------------------------------------- the modes
 
@@ -1320,6 +1489,8 @@ class CompareTab(QWidget):
     def set_language(self, language: str) -> None:
         self.language = language
         self._colour()
+        self._show_sidebar()
+        self._show_location()
 
     def _fill_language_menu(self, menu: QMenu) -> None:
         s = self.session
@@ -1766,6 +1937,9 @@ class CompareTab(QWidget):
         self.heads[1].set_focused(focused == 1)
         if result is not None:
             self.status.emit(self._status_line(result))
+            if self.sidebar.isVisible():
+                self.sidebar.set_current(self.view.state.current)
+        self._show_location()
         self.commandsChanged.emit()
 
     def _align(self) -> None:
@@ -1965,10 +2139,19 @@ class CompareTab(QWidget):
                          label="Ignore comments" + (
                              f"  ({' '.join(m.strip() for m in rules.markers)})"
                              if rules.markers else "  (not known for this file type)"))
+        layout = self.view.state.layout
         if id_ in self.VIEW_SHOWS:
+            if layout == "fluid":
+                return State(enabled=False, checked=id_ == "view-all",
+                             tip="Fluid shows every line; Side by side and Unified can "
+                                 "show only the differences")
             return State(checked=self.view.state.show == self.VIEW_SHOWS[id_])
+        if id_ in self.LAYOUTS:
+            return State(checked=layout == self.LAYOUTS[id_])
         if id_ == "details":
             return State(checked=self.view.details.isVisibleTo(self.view))
+        if id_ == "sidebar":
+            return State(checked=self._sidebar_on)
         if id_ == "mark-chars":
             return State(checked=s.options.intraline == "char")
         if id_ == "mark-words":
@@ -1981,7 +2164,11 @@ class CompareTab(QWidget):
             return State(enabled=has and editable[0])
         if id_ == "copy-all-right":
             return State(enabled=has and editable[1])
-        if id_ in ("edit", "insert-line", "delete-lines"):
+        if id_ in ("edit", "insert-line", "delete-lines", "align"):
+            if layout != "sbs":
+                return State(enabled=False, tip="Editing and aligning are in Side by side")
+            if id_ == "align":
+                return State(enabled=result is not None)
             return State(enabled=side.editable and bool(self.view.state.rows))
         if id_ == "undo":
             return State(enabled=side.doc is not None and side.doc.can_undo)
@@ -2007,13 +2194,17 @@ class CompareTab(QWidget):
             return State(visible=bool(rules.patterns))
         return HIDDEN
 
+    #: 1.19: the text layouts, by command.
+    LAYOUTS = {"layout-sbs": "sbs", "layout-fluid": "fluid", "layout-unified": "unified"}
+
     #: 1.18: the text view's show filter, by command.
     VIEW_SHOWS = {"view-all": "all", "view-diffs": "diffs", "view-same": "same",
                   "view-context": "context"}
 
     #: The text commands shown (greyed) while a text tab has nothing to show.
     TEXT_IDS = frozenset({
-        "view-all", "view-diffs", "view-same", "view-context", "details",
+        "view-all", "view-diffs", "view-same", "view-context", "details", "sidebar",
+        "layout-sbs", "layout-fluid", "layout-unified",
         "rules", "copy-left", "copy-right", "edit", "save", "undo", "redo", "find",
         "copy-all-left", "copy-all-right", "first", "last", "report", "mark-chars",
         "mark-words", "ignore-case", "ignore-blank", "ignore-comments", "copy-text",
@@ -2036,6 +2227,14 @@ class CompareTab(QWidget):
             on = not self.view.details.isVisibleTo(self.view)
             self.view.set_details(on)
             self.setting.emit("view.details", on)
+        elif id_ in self.LAYOUTS:
+            self.view.set_layout(self.LAYOUTS[id_])
+            self.setting.emit("view.layout", self.LAYOUTS[id_])
+            self._show_headings()
+        elif id_ == "sidebar":
+            self._sidebar_on = not self._sidebar_on
+            self.setting.emit("view.sidebar", self._sidebar_on)
+            self._show_sidebar()
         elif id_ == "structure":
             s.set_structure(not s.structure)
         elif id_ == "rules":

@@ -56,6 +56,11 @@ DEFAULTS: dict[str, Any] = {
     "view.show": "all",
     "view.context": 3,
     "view.details": True,
+    # 1.19: the differences list beside a text comparison, and the layout:
+    # "sbs" (side by side), "fluid" (no filler rows, bands between the
+    # sides) or "unified" (one column).
+    "view.sidebar": True,
+    "view.layout": "sbs",
 
     # Seconds a side may take to load before it is shown as not answering.
     # Generous, because a large file on a slow share is not a dead one.
