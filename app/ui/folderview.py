@@ -82,6 +82,7 @@ MARKS = {
     F.ONLY_RIGHT: "\u2192",
     F.CLASH: "?",
     F.ERROR: "\u00d7",
+    F.CHECKING: "\u2026",
 }
 
 SHOW_LABELS = (
@@ -299,8 +300,9 @@ class FolderModel(QAbstractItemModel):
             name = _wash(node.status)
             return QBrush(parse_colour(self.tokens.get(name))) if name else None
         if role == Qt.FontRole:
-            if (column == LTIME and node.status == F.NEWER_LEFT) or \
-                    (column == RTIME and node.status == F.NEWER_RIGHT):
+            # 1.22: the newer copy's time is bold whatever the verdict, so a
+            # pair with the same contents still says which was written last.
+            if column in (LTIME, RTIME) and F.newer_side(node) == side:
                 return self._bold
             if column == VERDICT:
                 return self._bold
@@ -319,6 +321,7 @@ def _ink(status: str) -> str:
         F.ERROR: "warn",
         F.CONTENT_SAME: "txt_2",
         F.HOUR_APART: "txt_2",
+        F.CHECKING: "txt_2",
     }.get(status, "")
 
 
@@ -1061,7 +1064,7 @@ class FolderView(QWidget):
         self.session.set_by_content(on)
         self.setting.emit("folders.by_content", bool(on))
         self.status.emit("Every pair with the same size is read after each walk" if on
-                         else "Pairs are judged by size and time; Compare contents reads them")
+                         else "Same-size pairs with different times are read after each walk")
 
     def _set_archives(self, on: bool) -> None:
         self.session.set_archives(on)
@@ -1076,7 +1079,8 @@ class FolderView(QWidget):
     def _contents(self, all_pairs: bool = False) -> None:
         count = self.session.compare_contents(all_pairs=all_pairs)
         if not count:
-            self.status.emit("Nothing to read: every pair is settled by size and time"
+            self.status.emit(("Already comparing contents" if self.session.busy else
+                              "Nothing to read: every pair is settled by size and time")
                              if not all_pairs else "No file pairs to read")
 
     def _contents_selected(self) -> None:

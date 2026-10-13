@@ -40,6 +40,7 @@ import codecs
 import hashlib
 import os
 import re
+import stat
 from dataclasses import dataclass, field
 
 from app.io import detect, longpath
@@ -147,6 +148,10 @@ class Loaded:
     endings: list[str] = field(default_factory=list)
     #: The bytes as read, for hex and image compare; None past `KEEP_BYTES`.
     data: bytes | None = field(default=None, repr=False)
+    #: 1.22: why a save would be refused, found when the file was read, so
+    #: the side says so before anything is copied into it rather than at
+    #: Ctrl+S. "" when nothing was found against it.
+    unwritable: str = ""
 
     @property
     def facts(self) -> str:
@@ -206,7 +211,41 @@ def load(path: str, *, max_bytes: int = MAX_BYTES, encoding: str = "") -> Loaded
         out.error = _reason(exc)
         return out
     decode_into(out, data, encoding=encoding)
+    out.unwritable = write_problem(target, info)
     return out
+
+
+def write_problem(target: str, info: os.stat_result) -> str:
+    """Why this file could not be written, or "". Opens it for writing and
+    closes it again without writing a byte, which changes nothing on disk --
+    not its contents, not its modification time -- and is the one way to ask
+    Windows the question that a save will ask: permissions are ACLs, and
+    `os.access` there only looks at the read-only attribute.
+
+    What it cannot see is whether a file may be *created* in the folder,
+    which the write-beside save needs too; finding that out would mean
+    creating one. The save still says so if that is what stops it."""
+    attrs = getattr(info, "st_file_attributes", 0)
+    if not (info.st_mode & stat.S_IWRITE) or (
+            attrs and attrs & getattr(stat, "FILE_ATTRIBUTE_READONLY", 1)):
+        return "The file is read-only"
+    try:
+        handle = os.open(target, os.O_WRONLY | getattr(os, "O_BINARY", 0))
+    except OSError as exc:
+        return refused(exc)
+    os.close(handle)
+    return ""
+
+
+def refused(exc: OSError) -> str:
+    """A write Windows turned down, in words. A sharing violation (32, 33) is
+    a program holding the file open; access denied (5) is a permission."""
+    code = getattr(exc, "winerror", None)
+    if code in (32, 33):
+        return "The file is open in another program"
+    if isinstance(exc, PermissionError):
+        return "Access is denied: no permission to change this file"
+    return ""
 
 
 def decode_into(out: Loaded, data: bytes, *, encoding: str = "") -> None:

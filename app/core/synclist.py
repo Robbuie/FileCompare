@@ -51,7 +51,8 @@ def category(node: F.Node) -> str:
         return LEFT_NEWER
     if status == F.NEWER_RIGHT:
         return RIGHT_NEWER
-    if status in (F.SAME, F.CONTENT_SAME, F.HOUR_APART):
+    if status in (F.SAME, F.CONTENT_SAME, F.HOUR_APART, F.CHECKING):
+        # Checking (1.22): not a difference until its contents say so.
         return SAME
     return DIFFERENT
 
@@ -76,6 +77,7 @@ def result(node: F.Node) -> str:
         F.CONTENT_DIFF: "Contents differ",
         F.CLASH: "A folder on one side, a file on the other",
         F.ERROR: "Could not be read",
+        F.CHECKING: "Checking contents",
     }
     return words.get(status, status)
 

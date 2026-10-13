@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.22.0 - differences by contents, and saves refused up front
+
+- **Folder compare marks a file as different for its contents, not its
+  clock.** Two files the same size with different times used to show red as
+  "newer" until Compare contents was run by hand, even when the bytes were
+  identical. Those pairs are now read straight after every walk. While they
+  are read they show grey with a `…` and are not counted; identical ones
+  then show as the same (under Same, not Differences), and changed ones stay
+  red as newer on one side. Files of different sizes are different and are
+  not read. The newer copy's time is bold in every row, same or not, in
+  both layouts, so which file was written last still shows.
+- "Always compare contents" is now **Compare contents of same-time pairs
+  too**: it adds the pairs whose size and time both match, which are
+  otherwise taken as the same.
+- **A file that cannot be saved says so when it opens**, over its side:
+  "Cannot save here: The file is read-only", "...: Access is denied: no
+  permission to change this file", or "...: The file is open in another
+  program". Before, nothing showed until Ctrl+S. The check opens the file
+  for writing and closes it without writing, so the file and its time are
+  untouched.
+- **A refused save names the reason**: a program holding the file open, no
+  permission on the file, or no permission to create files in the folder --
+  which the safe save needs, since it writes the new copy beside the file
+  and then renames it. Anything else carries Windows' error number.
+
 ## 1.21.0 - Home
 
 The last of the five releases reworking the window (1.17 to 1.21).

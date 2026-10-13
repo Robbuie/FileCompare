@@ -539,6 +539,7 @@ class Session(QObject):
             side.stale = False
             if side.loaded is not None:
                 side.loaded.encoding, side.loaded.bom = side.encoding, side.bom
+                side.loaded.unwritable = ""      # it was written: plainly it can be
         else:
             side.save_error = result.error
         self.saved.emit(index, result)

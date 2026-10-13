@@ -301,8 +301,18 @@ must not shrink what Alt+Right copies.
   same-size pair exactly an hour apart `HOUR_APART` -- shown grey, not
   counted, never synced, still read by a content compare. This is the one
   place the verdicts knowingly differ from File Manager's pane compare.
-  **Always compare contents** (`folders.by_content`, off) reads every
-  same-size pair after each walk.
+  **Compare contents of same-time pairs too** (`folders.by_content`, off;
+  "Always compare contents" until 1.22) adds the same-size, same-time pairs.
+- **Undecided pairs are always read (1.22).** Same size, different time is
+  read straight after every walk (`FolderSession._to_read`), so a row is red
+  for its bytes and never for its clock alone. While read it is `CHECKING`:
+  grey, a `…`, not counted, `before` holding the size-and-time verdict that
+  `unchecked` puts back if the read stops. Identical becomes `CONTENT_SAME`;
+  different keeps `NEWER_LEFT`/`NEWER_RIGHT`, because the Left/Right filters,
+  the sync list's newer columns and an update all go by it (`CONTENT_DIFF`
+  is for pairs with no newer side). The newer copy's time is bold in every
+  row whatever the verdict (`folders.newer_side`). The report path in
+  `app/batch.py` already read these pairs.
 - Zip contents (1.9, `folders.archives`, on): `io/archive.py` reads each
   .zip's central directory during the walk and lists its members as entries
   with `archive` (the zip's rel) and `crc` set. A member pair is judged by
@@ -443,6 +453,12 @@ This is where compare tools quietly damage files. The rules:
   carries the real name. Same invariant as File Manager's copy engine.
 - **Before saving, check the file on disk is still the one that was loaded**
   (size and mtime). If it changed, ask: reload, overwrite, or save elsewhere.
+- **A side says it cannot be saved when it is read (1.22)**, not at Ctrl+S:
+  `io/load.write_problem` opens the file for writing and closes it unwritten
+  (read-only attribute, access denied, open in another program) into
+  `Loaded.unwritable`, shown on the side's state line. It cannot see whether
+  the folder takes new files, which the save needs; finding that out would
+  mean creating one, so the save's own error says so instead.
 - **Read-only files and read-only sessions are respected.** `--readonly` from
   the command line makes a side read-only for the life of the tab.
 - **A backup is a setting**, off by default: `name.ext.orig` beside the file on

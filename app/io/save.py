@@ -118,7 +118,12 @@ def save(path: str, data: bytes, *, expect_size: int | None = None,
     try:
         handle, temp = tempfile.mkstemp(prefix=f".{name}.", suffix=".fcsave", dir=folder)
     except OSError as exc:
-        out.error = f"Could not write in the folder: {_reason(exc)}"
+        # 1.22: the safe save writes a new file beside this one, so it needs
+        # permission to create files in the folder, not only to change this
+        # file -- some shares and Program Files allow the second only.
+        out.error = (f"No permission to create files in this folder, which a safe "
+                     f"save needs ({_reason(exc)})" if isinstance(exc, PermissionError)
+                     else f"Could not write in the folder: {_reason(exc)}")
         return out
     try:
         with os.fdopen(handle, "wb") as stream:
@@ -151,7 +156,7 @@ def save(path: str, data: bytes, *, expect_size: int | None = None,
         os.replace(temp, target)
     except OSError as exc:
         _discard(temp)
-        out.error = _reason(exc)
+        out.error = _replace_reason(exc) if info is not None else _reason(exc)
         return out
     try:
         info = os.stat(target)
@@ -194,6 +199,18 @@ def _discard(temp: str) -> None:
         os.remove(temp)
     except OSError:
         pass
+
+
+def _replace_reason(exc: OSError) -> str:
+    """The rename onto the old file was refused (1.22): say which of the two
+    usual reasons it was, with Windows' number for anything else."""
+    from app.io.load import refused
+
+    words = refused(exc)
+    if words:
+        return words
+    code = getattr(exc, "winerror", None)
+    return f"{_reason(exc)} (Windows error {code})" if code else _reason(exc)
 
 
 def _reason(exc: OSError) -> str:

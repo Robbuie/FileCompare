@@ -182,7 +182,7 @@ COMMANDS: dict[str, Command] = {c.id: c for c in (
     _c("ignore-blank", "Ignore blank lines", "", "", "", "", True),
     _c("ignore-comments", "Ignore comments", "", "", "", "", True),
     _c("ignore-hour", "Ignore a one-hour shift (clock change)", "", "", "", "", True),
-    _c("always-contents", "Always compare contents", "", "", "", "", True),
+    _c("always-contents", "Compare contents of same-time pairs too", "", "", "", "", True),
     _c("look-in-zips", "Look inside .zip files", "", "", "", "", True),
     # Tools, folders
     _c("contents", "Compare contents of undecided files", "", "contents", "Contents",

@@ -52,6 +52,10 @@ CONTENT_SAME = "content same"  # times differ, bytes do not
 HOUR_APART = "hour apart"     # same size, times exactly an hour apart (1.8)
 CONTENT_DIFF = "content differs"
 ERROR = "error"               # a side could not be read
+#: 1.22: a same-size pair with different times whose bytes are being read
+#: right now. Not a difference yet: size and time cannot say, and showing it
+#: as one until the read answers is what made identical files look changed.
+CHECKING = "checking"
 
 #: What counts as a difference. `CONTENT_SAME` does not: the files are the
 #: same, and only the clock disagrees -- shown, but not counted.
@@ -70,6 +74,7 @@ LABELS = {
     HOUR_APART: "same size, an hour apart",
     CONTENT_DIFF: "content differs",
     ERROR: "could not be read",
+    CHECKING: "same size, different time: reading the contents",
 }
 
 
@@ -107,6 +112,9 @@ class Node:
     #: under this folder. A sync never copies or removes such a folder whole:
     #: what the mask hid would go with it.
     masked: tuple[bool, bool] = (False, False)
+    #: 1.22: while `status` is CHECKING, the verdict size and time gave, put
+    #: back if the read is stopped before it answers.
+    before: str = ""
 
     @property
     def is_dir(self) -> bool:
@@ -316,16 +324,54 @@ def rejudge(node: Node) -> None:
 
 def settle(node: Node, same_bytes: bool | None, error: str = "") -> None:
     """Record what a content compare found for one file pair."""
+    base = node.before if node.status == CHECKING else node.status
+    node.before = ""
     if error:
         node.status = ERROR
     elif same_bytes is None:
-        return
+        node.status = base
     elif same_bytes:
-        node.status = SAME if node.status == SAME else CONTENT_SAME
+        node.status = SAME if base == SAME else CONTENT_SAME
+    elif base in (NEWER_LEFT, NEWER_RIGHT):
+        # 1.22: the bytes confirm the edit, and which side is newer is still
+        # the useful thing to say -- the Left and Right filters, the sync
+        # list's newer columns and an update all go by it.
+        node.status = base
     else:
         node.status = CONTENT_DIFF
     node.differing = 1 if node.status in DIFFERENT_KINDS else 0
     rejudge(node)
+
+
+def checking(nodes: Iterable[Node]) -> None:
+    """Mark pairs whose bytes are about to be read (1.22): not counted, not
+    coloured, until `settle` or `unchecked` says what they are."""
+    for node in nodes:
+        if node.status != CHECKING:
+            node.before = node.status
+            node.status = CHECKING
+            node.differing = 0
+            rejudge(node)
+
+
+def unchecked(nodes: Iterable[Node]) -> None:
+    """A read stopped before it answered: the pairs go back to what size and
+    time said, which is all that is known about them."""
+    for node in nodes:
+        if node.status == CHECKING:
+            settle(node, None)
+
+
+def newer_side(node: Node, tolerance: float = TOLERANCE) -> int:
+    """0 when the left file was written later, 1 the right, -1 neither or not
+    a pair. Said whatever the verdict, so a pair with the same contents still
+    shows which copy is the more recent."""
+    if not node.pair:
+        return -1
+    apart = node.left.mtime - node.right.mtime
+    if abs(apart) <= tolerance:
+        return -1
+    return 0 if apart > 0 else 1
 
 
 def _sort(node: Node) -> None:
@@ -391,12 +437,16 @@ def summary(root: Node) -> str:
     differing = sum(n for k, n in totals.items() if k in DIFFERENT_KINDS)
     if not files:
         return "Both folders are empty"
+    reading = (f"  ·  checking {totals[CHECKING]:,} same-size files"
+               if totals.get(CHECKING) else "")
     if not differing:
-        extra = ""
+        extra = reading
         if totals.get(CONTENT_SAME):
-            extra = f"  ·  {totals[CONTENT_SAME]:,} with different times"
+            extra += f"  ·  {totals[CONTENT_SAME]:,} with different times"
         if totals.get(HOUR_APART):
             extra += f"  ·  {totals[HOUR_APART]:,} an hour apart (clock change)"
+        if reading:
+            return f"No differences so far in {files:,} files{extra}"
         return f"No differences in {files:,} files{extra}"
     parts = []
     for key in (NEWER_LEFT, NEWER_RIGHT, ONLY_LEFT, ONLY_RIGHT, DIFFERENT, CONTENT_DIFF,
@@ -405,7 +455,7 @@ def summary(root: Node) -> str:
             parts.append(f"{totals[key]:,} {LABELS[key]}")
     if totals.get(HOUR_APART):
         parts.append(f"{totals[HOUR_APART]:,} an hour apart, not counted")
-    return f"{differing:,} of {files:,} differ  ·  " + "  ·  ".join(parts)
+    return f"{differing:,} of {files:,} differ  ·  " + "  ·  ".join(parts) + reading
 
 
 def content_candidates(root: Node, *, all_pairs: bool = False) -> list[Node]:

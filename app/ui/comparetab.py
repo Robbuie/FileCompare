@@ -349,6 +349,12 @@ class SideHead(QWidget):
             state, tone, again = "Changed on disk", "bad", "Reload"
         elif side.dirty:
             state, tone = "Modified", "dirty"
+        if tone != "bad" and not side.readonly and side.doc is not None \
+                and side.loaded is not None and side.loaded.unwritable:
+            # 1.22: said as soon as the file is read, not first at Ctrl+S.
+            state = (f"{state}  ·  " if state else "") + \
+                f"Cannot save here: {side.loaded.unwritable}"
+            tone = "bad"
         self.state.setText(state)
         self.state.setProperty("state", tone)
         self.state.style().unpolish(self.state)

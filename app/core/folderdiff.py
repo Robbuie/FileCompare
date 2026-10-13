@@ -181,9 +181,16 @@ class FolderSession(QObject):
             return
         self.by_content = on
         if on and self.tree is not None and not self.busy:
-            self.compare_contents(nodes=[n for n in self.tree.walk()
-                                         if n.pair and not n.member
-                                         and n.left.size == n.right.size])
+            self.compare_contents(nodes=self._to_read())
+
+    def _to_read(self) -> list[folders.Node]:
+        if self.tree is None:
+            return []
+        if self.by_content:
+            return [n for n in self.tree.walk()
+                    if n.pair and not n.member and n.left.size == n.right.size
+                    and n.status not in (folders.CONTENT_SAME, folders.CONTENT_DIFF)]
+        return folders.content_candidates(self.tree)
 
     def set_archives(self, on: bool) -> None:
         """Members of zips listed or not: a walk again, since the walk is
@@ -260,6 +267,7 @@ class FolderSession(QObject):
         self._content_nodes = {i: node for i, node in enumerate(chosen)}
         pairs = [(i, _join(left_root, node.rel), _join(right_root, node.rel))
                  for i, node in self._content_nodes.items()]
+        folders.checking(chosen)
         self.content = io_walk.Progress()
         self.content_total = len(pairs)
         self._content_seen, self._content_still = -1, 0.0
@@ -277,6 +285,8 @@ class FolderSession(QObject):
             self.content.cancel.set()
         self._content_request = 0
         self.content = None
+        folders.unchecked(self._content_nodes.values())
+        self._content_nodes = {}
 
     def stop(self) -> None:
         self._poll.stop()
@@ -394,6 +404,7 @@ class FolderSession(QObject):
                     self.content.cancel.set()
                     self._content_request = 0
                     self.content = None
+                    folders.unchecked(self._content_nodes.values())
                     self._content_nodes = {}
                     self.problem = (f"Comparing contents stopped: nothing read for "
                                     f"{self.timeout:g} seconds. The share may be "
@@ -447,12 +458,13 @@ class FolderSession(QObject):
             if envelope.ok:
                 self.tree = envelope.value
                 self.problem = ""
-                if self.by_content:
-                    # Different sizes are different files whatever the bytes;
-                    # every other pair is read.
-                    self.compare_contents(nodes=[
-                        n for n in self.tree.walk()
-                        if n.pair and not n.member and n.left.size == n.right.size])
+                # 1.22: the pairs size and time cannot settle -- same size,
+                # different time -- are always read, so a file is called
+                # different for its contents and never for its clock alone.
+                # Different sizes are different files whatever the bytes.
+                # "Compare contents of same-time pairs too" reads the same-size, same-time
+                # pairs as well.
+                self.compare_contents(nodes=self._to_read())
             else:
                 self.problem = f"The comparison failed: {envelope.error}"
             self.changed.emit()
@@ -473,6 +485,9 @@ class FolderSession(QObject):
                     node = self._content_nodes.get(key)
                     if node is not None:
                         folders.settle(node, same, error)
+            # Any the read did not answer for -- it failed or was stopped --
+            # go back to what size and time said.
+            folders.unchecked(self._content_nodes.values())
             self._content_nodes = {}
             self.content = None
             self.changed.emit()

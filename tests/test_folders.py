@@ -75,7 +75,8 @@ def test_content_compare_settles_the_undecided():
     F.settle(find(root, "moved.txt"), True)
     F.settle(find(root, "edited.txt"), False)
     assert find(root, "moved.txt").status == F.CONTENT_SAME
-    assert find(root, "edited.txt").status == F.CONTENT_DIFF
+    # 1.22: confirmed different, and still said to be newer on the right.
+    assert find(root, "edited.txt").status == F.NEWER_RIGHT
     assert root.differing == 1
     assert "1 of 2 differ" in F.summary(root)
 
@@ -128,14 +129,15 @@ def test_the_folder_session_walks_both_sides_and_compares_contents(qt_app, tmp_p
         time.sleep(0.01)
     assert session.tree is not None
     assert find(session.tree, "gone.txt").status == F.ONLY_LEFT
-    assert find(session.tree, "sub\\touched.txt").status in (F.NEWER_LEFT, F.NEWER_RIGHT)
-
-    session.compare_contents()
+    # 1.22: same size, different time is read straight after the walk, and
+    # is not a difference while it is.
+    touched = find(session.tree, "sub\\touched.txt")
+    assert touched.status == F.CHECKING and not touched.differs
     end = time.monotonic() + 10
     while session.busy and time.monotonic() < end:
         QCoreApplication.processEvents()
         time.sleep(0.01)
-    assert find(session.tree, "sub\\touched.txt").status == F.CONTENT_SAME
+    assert touched.status == F.CONTENT_SAME
     loader.shutdown()
 
 
@@ -164,7 +166,8 @@ def test_the_window_shows_two_folders_and_opens_a_pair(qt_app, tmp_path):
 
     def ready():
         QCoreApplication.processEvents()
-        return tab.folders is not None and tab.folders.session.tree is not None
+        return (tab.folders is not None and tab.folders.session.tree is not None
+                and not tab.folders.session.busy)
 
     end = time.monotonic() + 10
     while not ready() and time.monotonic() < end:
@@ -206,3 +209,59 @@ def test_a_file_only_on_one_side_opens_against_nothing(qt_app, tmp_path):
         QCoreApplication.processEvents()
         time.sleep(0.01)
     assert s.kind == core.TEXT and s.result.counts()["deleted"] == 2
+
+
+def test_identical_files_with_different_times_are_not_differences(qt_app, tmp_path):
+    """1.22: what was reported -- the same contents, a later time on one side,
+    and the row in red. The bytes decide; the time only says which is newer."""
+    from PySide6.QtCore import QCoreApplication
+
+    from app.core.folderdiff import FolderSession
+    from app.core.loader import Loader
+    from app.ui.folderview import FolderModel, LTIME, RTIME
+
+    left, right = tmp_path / "L", tmp_path / "R"
+    left.mkdir()
+    right.mkdir()
+    for name, a, b in (("copy.txt", b"same bytes", b"same bytes"),
+                       ("edit.txt", b"version 1", b"version 2"),
+                       ("grown.txt", b"short", b"longer")):
+        (left / name).write_bytes(a)
+        (right / name).write_bytes(b)
+        os.utime(left / name, (1_000_000, 1_000_000))
+        os.utime(right / name, (2_000_000, 2_000_000))
+
+    loader = Loader()
+    session = FolderSession(loader, str(left), str(right))
+    session.start()
+    end = time.monotonic() + 10
+    while (session.tree is None or session.busy) and time.monotonic() < end:
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+    copy, edit, grown = (find(session.tree, n) for n in ("copy.txt", "edit.txt", "grown.txt"))
+    assert copy.status == F.CONTENT_SAME and not copy.differs
+    assert edit.status == F.NEWER_RIGHT and edit.differs
+    assert grown.status == F.NEWER_RIGHT          # sizes differ: never needed reading
+    assert session.tree.differing == 2
+    assert not F.shown(copy, F.SHOW_DIFFERENT) and F.shown(copy, F.SHOW_SAME)
+    assert F.newer_side(copy) == 1                # still says which was written last
+    from PySide6.QtCore import QModelIndex, Qt
+
+    model = FolderModel()
+    model.set_tree(session.tree, F.SHOW_ALL)
+    rows = {model.index(r, 0, QModelIndex()).internalPointer().rel: r
+            for r in range(model.rowCount())}
+    row = rows["copy.txt"]
+    assert model.data(model.index(row, RTIME, QModelIndex()), Qt.FontRole) is not None
+    assert model.data(model.index(row, LTIME, QModelIndex()), Qt.FontRole) is None
+    loader.shutdown()
+
+
+def test_a_stopped_read_puts_the_verdict_back():
+    root = F.build([e("a.txt", mtime=1000)], [e("a.txt", mtime=9000)])
+    node = find(root, "a.txt")
+    F.checking([node])
+    assert node.status == F.CHECKING and root.differing == 0
+    assert "checking 1" in F.summary(root)
+    F.unchecked([node])
+    assert node.status == F.NEWER_RIGHT and root.differing == 1

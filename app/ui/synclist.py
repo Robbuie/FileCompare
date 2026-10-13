@@ -271,6 +271,10 @@ class SyncModel(QAbstractItemModel):
             if column in (LTIME, LSIZE) and category == L.LEFT_NEWER or \
                     column in (RTIME, RSIZE) and category == L.RIGHT_NEWER:
                 return self._bold
+            # 1.22: a same pair still says which copy was written last.
+            if category == L.SAME and column in (LTIME, RTIME) and \
+                    F.newer_side(node) == (0 if column == LTIME else 1):
+                return self._bold
             return None
         if role == Qt.TextAlignmentRole:
             if column in (LSIZE, LTIME, RSIZE):
