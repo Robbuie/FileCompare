@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 
 from app.core import folders as F
 from app.core import formats, siblings, syntax
+from app.core import caret as C
 from app.core import session as core
 from app.core.diff import align
 from app.core.folders import SHOWS as F_SHOWS
@@ -618,6 +619,12 @@ class CompareTab(QWidget):
         self.view.copyRows.connect(self._copy_rows)
         self.view.menuRequested.connect(self._text_menu)
         self.view.edited.connect(self._edited)
+        # 1.23: typing straight into the panes.
+        self.caret: C.Caret | None = None
+        self._caret_group = 0
+        self.view.state.typing = bool(session.options.typing)
+        self.view.caretPlaced.connect(self._caret_placed)
+        self.view.caretKey.connect(self._caret_key)
         self.find = FindBar()
         self.find.changed.connect(self._find_changed)
         self.find.step.connect(self._find_step)
@@ -685,6 +692,7 @@ class CompareTab(QWidget):
 
         session.changed.connect(self.refresh)
         session.saved.connect(self._saved)
+        session.renamed.connect(self._renamed)
         self.apply_tokens(tokens)
         self.refresh()
 
@@ -757,6 +765,14 @@ class CompareTab(QWidget):
                 self.status.emit("Nothing to redo on this side")
         elif name == "save":
             self.save_side(side)
+        elif name in ("save-left", "save-right"):
+            self.save_side(0 if name == "save-left" else 1)
+        elif name in ("save-into-left", "save-into-right"):
+            self.save_into(0 if name == "save-into-left" else 1)
+        elif name == "rename-side":
+            self.rename_side(side)
+        elif name == "typing":
+            self.set_typing(not self.view.state.typing)
         elif name == "save-all":
             self.save_all()
         elif name == "find":
@@ -972,6 +988,184 @@ class CompareTab(QWidget):
             if not s.sides[side].editable:
                 self._can_edit(side)
 
+    # ------------------------------------------------- typing (1.23)
+
+    def set_typing(self, on: bool) -> None:
+        """Edit > Type in the panes (Ctrl+E): click into either side and
+        type, with no box to open first. Off, a click selects lines as it
+        always has and F2 opens the line editor."""
+        self.view.state.typing = on
+        self.setting.emit("view.typing", on)
+        if on:
+            if self.caret is None and self.view.state.rows:
+                row = min(self.view.state.cursor, len(self.view.state.rows) - 1)
+                self._caret_placed(self.view.focused_side, row, 0)
+            else:
+                self._place_caret()
+            self.status.emit("Typing in the panes: click where to type. Ctrl+S saves the "
+                             "side; Ctrl+E turns typing off.")
+        else:
+            self.caret = None
+            self.view.show_caret(None)
+            self.status.emit("Typing off: click selects lines, F2 edits them")
+
+    def _caret_placed(self, side: int, row: int, column: int) -> None:
+        """A click, or typing switched on: the caret on that row's line of
+        that side, at the character nearest the column clicked."""
+        rows = self.view.state.rows
+        if not rows:
+            return
+        row = max(0, min(row, len(rows) - 1))
+        lines = self.session.sides[side].lines
+        index = rows[row][side]
+        if index == align.NONE:
+            # A filler row: the caret waits on a line not made yet, where
+            # copying the other side's lines across would put them.
+            first, _stop = align.side_range(rows, row, row + 1, side)
+            self.caret = C.Caret(side, first, 0, fresh=True)
+        else:
+            text = lines[index] if index < len(lines) else ""
+            self.caret = C.Caret(side, index, C.char_col(text, column))
+        self._caret_group += 1
+        self._place_caret()
+        if not self.session.sides[side].editable:
+            self._can_edit(side)
+
+    def _caret_key(self, what: str, text: str) -> None:
+        s = self.session
+        caret = self.caret
+        if caret is None:
+            return
+        if what == "rows":
+            # Up, down or a page: the view moved the cursor; the caret goes
+            # to that row on the same side, keeping its screen column.
+            at = self.view.state.caret_at
+            column = at[2] if at is not None else 0
+            self._caret_placed(caret.side, self.view.state.cursor, column)
+            return
+        lines = s.sides[caret.side].lines
+        if what in ("left", "right", "home", "end", "word-left", "word-right"):
+            self.caret = C.move(lines, caret, what)
+            self._caret_group += 1
+            self._place_caret()
+            return
+        if not self._can_edit(caret.side):
+            return
+        if what == "insert":
+            change = C.insert(lines, caret, text)
+        elif what == "enter":
+            change = C.newline(lines, caret)
+        elif what == "backspace":
+            change = C.backspace(lines, caret)
+        elif what == "delete":
+            change = C.delete(lines, caret)
+        else:
+            return
+        if change is None:
+            return
+        if isinstance(change, C.Caret):
+            self.caret = change
+            self._caret_group += 1
+            self._place_caret()
+            return
+        group = f"{change.group}#{self._caret_group}" if change.group else ""
+        if not change.group:
+            self._caret_group += 1
+        self.caret = change.caret
+        # The session runs the diff again and refresh() places the caret on
+        # the new rows; when nothing changed (the same text), place it here.
+        if not s.type_edit(caret.side, change.start, change.end, list(change.lines), group):
+            self._place_caret()
+
+    def _place_caret(self) -> None:
+        """The caret from line and character to row and screen column, on the
+        rows the view has now."""
+        caret = self.caret
+        state = self.view.state
+        if caret is None or not state.typing or not state.rows \
+                or self.session.sides[caret.side].doc is None:
+            self.view.show_caret(None)
+            return
+        lines = self.session.sides[caret.side].lines
+        caret = self.caret = C.clamp(caret, lines)
+        rows = state.rows
+        side = caret.side
+        # The row holding line `caret.line`, or for a fresh caret the row
+        # just after line `caret.line - 1`, which is the first place a line
+        # inserted there would show.
+        want = caret.line - 1 if caret.fresh else caret.line
+        row = 0
+        if want >= 0:
+            found = None
+            for r, entry in enumerate(rows):
+                if entry[side] == want:
+                    found = r
+                    break
+                if entry[side] != align.NONE and entry[side] > want:
+                    break
+            if found is None:
+                row = min(len(rows) - 1, max(0, state.cursor))
+            else:
+                row = min(len(rows) - 1, found + 1) if caret.fresh else found
+        column = 0
+        if not caret.fresh and caret.line < len(lines):
+            column = C.display_col(lines[caret.line], caret.col)
+        self.view.show_caret(side, row, column)
+
+    # ------------------------------------------- save into, rename (1.23)
+
+    def save_into(self, to_side: int) -> bool:
+        """This side's text written into the other side's file: the other
+        side becomes this text -- one undoable edit, its own encoding and
+        line endings kept -- and is saved. Asked first, since it replaces
+        that whole file."""
+        s = self.session
+        source, target = s.sides[1 - to_side], s.sides[to_side]
+        names = ("left", "right")
+        if not self._can_edit(to_side) or source.doc is None:
+            return False
+        name = ntpath.basename(display(target.path)) or names[to_side]
+        answer = QMessageBox.question(
+            self, f"Save into the {names[to_side]} file",
+            f"Replace everything in {name} with the {names[1 - to_side]} side's text, "
+            "and save it?\n\nIt keeps its own encoding and line endings. Ctrl+Z on the "
+            f"{names[to_side]} side takes it back until you close the tab.",
+            QMessageBox.Save | QMessageBox.Cancel, QMessageBox.Save)
+        if answer != QMessageBox.Save:
+            return False
+        s.copy_all(to_side)
+        return self.save_side(to_side, force=False) or True
+
+    def rename_side(self, index: int) -> None:
+        """Give one side's file a new name, in its own folder. Edits and
+        undo carry on; the next save writes under the new name."""
+        from PySide6.QtWidgets import QInputDialog
+
+        from app.io.save import name_problem
+
+        s = self.session
+        side = s.sides[index]
+        if not side.path or side.kind != "file":
+            self.status.emit("Only a file on disk can be renamed")
+            return
+        old = ntpath.basename(display(side.path))
+        name, ok = QInputDialog.getText(self, "Rename", f"New name for {old}:", text=old)
+        if not ok or name == old:
+            return
+        problem = name_problem(name)
+        if problem:
+            self.status.emit(f"Not renamed: {problem}")
+            return
+        if s.rename(index, name):
+            self.status.emit(f"Renaming {old}...")
+
+    def _renamed(self, index: int, result) -> None:
+        if result.ok:
+            self.status.emit(f"Renamed to {ntpath.basename(display(result.path))}")
+            self.titleChanged.emit()
+        else:
+            self.status.emit(f"Not renamed: {result.error}")
+
     # -------------------------------------------------------------- saving
 
     def save_side(self, index: int, *, force: bool = False) -> bool:
@@ -1093,6 +1287,13 @@ class CompareTab(QWidget):
         save = menu.addAction("Save\tCtrl+S", lambda: self.save_side(index))
         save.setEnabled(side.editable and (side.dirty or s.encoding_changed(index)))
         menu.addAction("Save as...", lambda: self.save_side_as(index)).setEnabled(side.doc is not None)
+        other = ("right", "left")[index]
+        into = menu.addAction(f"Save this text into the {other} file...",
+                              lambda: self.save_into(1 - index))
+        into.setEnabled(side.doc is not None and s.sides[1 - index].editable
+                        and s.result is not None)
+        menu.addAction("Rename...", lambda: self.rename_side(index)).setEnabled(
+            bool(side.path) and side.kind == "file" and not side.saving)
         menu.addSeparator()
         reading = menu.addMenu("Read as")
         auto = reading.addAction("Work it out" + (
@@ -1259,6 +1460,7 @@ class CompareTab(QWidget):
                 self._shown_result = s.result
                 left, right = s.result_lines
                 self.view.set_comparison(s.result, left, right, s.options.intraline, s.pins)
+                self._place_caret()
                 self._colour()
                 self._outline_for = None
                 if self.find.isVisible():
@@ -1659,6 +1861,7 @@ class CompareTab(QWidget):
                                    parent=self)
             self.folders = FolderView(folder, self._tokens, mask=s.options.folder_mask,
                                       open_expanded=s.options.folder_open_expanded,
+                                      preview_copies=s.options.folder_preview_copies,
                                       layout=s.options.folder_layout,
                                       categories=s.options.folder_categories)
             if s.options.folder_show in F_SHOWS:
@@ -2088,7 +2291,8 @@ class CompareTab(QWidget):
         "swap", "reload", "copy-left", "copy-right", "copy-all-left", "copy-all-right",
         "undo", "redo", "save", "save-all", "find", "find-next", "find-previous",
         "copy-text", "report", "save-session", "align", "unalign", "move-partner",
-        "select-all", "edit", "insert-line", "delete-lines"})
+        "select-all", "edit", "insert-line", "delete-lines", "typing", "save-left",
+        "save-right", "save-into-left", "save-into-right", "rename-side"})
 
     def page_kind(self) -> str:
         """Which toolbar the window shows: "text", "folder" or "other"."""
@@ -2191,6 +2395,20 @@ class CompareTab(QWidget):
             if id_ == "align":
                 return State(enabled=result is not None)
             return State(enabled=side.editable and bool(self.view.state.rows))
+        if id_ == "typing":
+            return State(checked=self.view.state.typing, enabled=layout == "sbs",
+                         tip="" if layout == "sbs" else "Typing is in Side by side")
+        if id_ in ("save-left", "save-right"):
+            index = 0 if id_ == "save-left" else 1
+            other = s.sides[index]
+            return State(enabled=other.editable and (other.dirty or s.encoding_changed(index)))
+        if id_ in ("save-into-left", "save-into-right"):
+            to = 0 if id_ == "save-into-left" else 1
+            return State(enabled=result is not None and s.sides[to].editable
+                         and s.sides[1 - to].doc is not None)
+        if id_ == "rename-side":
+            return State(enabled=bool(side.path) and side.kind == "file"
+                         and not side.saving)
         if id_ == "undo":
             return State(enabled=side.doc is not None and side.doc.can_undo)
         if id_ == "redo":
@@ -2230,7 +2448,8 @@ class CompareTab(QWidget):
         "copy-all-left", "copy-all-right", "first", "last", "report", "mark-chars",
         "mark-words", "ignore-case", "ignore-blank", "ignore-comments", "copy-text",
         "select-all", "save-all", "save-as", "insert-line", "delete-lines", "align",
-        "unalign", "move-partner", "find-next", "find-previous"})
+        "unalign", "move-partner", "find-next", "find-previous", "typing", "save-left",
+        "save-right", "save-into-left", "save-into-right", "rename-side"})
 
     def run_command(self, id_: str) -> None:
         s = self.session

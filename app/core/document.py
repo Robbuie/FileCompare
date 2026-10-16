@@ -36,6 +36,8 @@ class Splice:
     old_endings: list[str]
     new_lines: list[str]
     new_endings: list[str]
+    #: 1.23: typing on one line that later keys may fold into this step.
+    group: str = ""
 
 
 @dataclass
@@ -81,7 +83,7 @@ class Document:
     # -------------------------------------------------------------- editing
 
     def replace(self, start: int, end: int, new_lines: Sequence[str],
-                new_endings: Sequence[str] | None = None) -> bool:
+                new_endings: Sequence[str] | None = None, *, group: str = "") -> bool:
         """Lines `start:end` become `new_lines`. False if nothing changed.
 
         Lines inherit the endings of the lines they replace, position by
@@ -125,7 +127,18 @@ class Document:
         if self.lines[start:end] == new_lines and self.endings[start:end] == new_endings:
             return False
         splice = Splice(start, self.lines[start:end], self.endings[start:end],
-                        new_lines, new_endings)
+                        new_lines, new_endings, group)
+        last = self._undo[-1] if self._undo else None
+        if (group and last is not None and last.group == group and not self._redo
+                and self._saved_at != len(self._undo) and last.start == start
+                and len(last.new_lines) == 1 and len(splice.old_lines) == 1
+                and len(new_lines) == 1 and last.new_lines == splice.old_lines):
+            # 1.23: one more key on the line the last step was typing on.
+            # Undo takes back the word, not the letter; a save in between
+            # (saved_at) or a different line starts a new step.
+            self._apply(splice)
+            last.new_lines, last.new_endings = list(new_lines), list(new_endings)
+            return True
         self._apply(splice)
         self._undo.append(splice)
         if self._saved_at > len(self._undo) - 1:
@@ -168,7 +181,7 @@ class Document:
 
 def _inverse(splice: Splice) -> Splice:
     return Splice(splice.start, splice.new_lines, splice.new_endings,
-                  splice.old_lines, splice.old_endings)
+                  splice.old_lines, splice.old_endings, splice.group)
 
 
 def dominant(endings: Sequence[str]) -> str:

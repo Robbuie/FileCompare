@@ -373,3 +373,75 @@ def test_the_tab_copies_a_selection_with_the_arrow_keys(qt_app, tmp_path):
     finally:
         window._may_close = lambda pages: True
         window.close()
+
+
+def test_typing_in_the_panes_edits_saves_into_the_other_side_and_renames(qt_app, tmp_path,
+                                                                          monkeypatch):
+    """1.23: Ctrl+E, a click, keys -- the side changes as typed, the diff
+    keeps up, a word is one undo step; then the left's text saved into the
+    right file, and the left file renamed."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+    from app import cli
+    from app.core import session as core
+    from app.core.config import Config
+    from app.ui.window import MainWindow
+
+    a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+    a.write_bytes(b"alpha\r\nbeta\r\n")
+    b.write_bytes(b"alpha\nBETA\ngamma\n")
+    window = MainWindow(Config(path=str(tmp_path / "c.json")), look={}, look_source="own",
+                        custom_frame=False)
+    window.resize(1000, 600)
+    window.open_request(cli.parse([str(a), str(b)]))
+    window.show()
+    tab = window.pages.currentWidget()
+    try:
+        assert wait_for(lambda: tab.session.kind == core.TEXT and tab.session.current)
+        view = tab.view
+        tab.run_command("typing")
+        assert view.state.typing and window.command_state("typing").checked
+        # A click on the left's second line, after "be".
+        pane = view.left
+        x = int(pane.number_width() + 8 + 2 * pane.char_w + 1)
+        y = int(view.state.display_of(1) * pane.row_h + pane.row_h / 2)
+        QTest.mouseClick(pane, Qt.LeftButton, Qt.NoModifier, QPoint(x, y))
+        assert tab.caret is not None and (tab.caret.line, tab.caret.col) == (1, 2)
+        view.setFocus()
+        QTest.keyClicks(view, "XY")
+        assert tab.session.sides[0].lines == ["alpha", "beXYta"]
+        assert wait_for(lambda: tab.session.current)
+        QTest.keyClick(view, Qt.Key_Backspace)
+        QTest.keyClick(view, Qt.Key_End)
+        QTest.keyClick(view, Qt.Key_Return)
+        QTest.keyClicks(view, "new")
+        assert tab.session.sides[0].lines == ["alpha", "beXta", "new"]
+        assert view.state.caret_at[0] == 0
+        tab._command("undo")                     # "new"
+        tab._command("undo")                     # the line break
+        tab._command("undo")                     # "XY" and the backspace, one step
+        assert tab.session.sides[0].lines == ["alpha", "beta"]
+        # Typing on a side that cannot be edited says why and changes nothing.
+        tab.session.sides[1].readonly = True
+        tab._caret_placed(1, 0, 0)
+        QTest.keyClicks(view, "z")
+        assert tab.session.sides[1].lines == ["alpha", "BETA", "gamma"]
+        tab.session.sides[1].readonly = False
+
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Save)
+        tab._command("save-into-right")
+        assert wait_for(lambda: not tab.session.sides[1].dirty)
+        assert b.read_bytes() == b"alpha\nbeta\n"           # its own LF endings kept
+
+        monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("renamed.txt", True))
+        view.state.side = 0
+        tab._command("rename-side")
+        assert wait_for(lambda: tab.session.sides[0].path.endswith("renamed.txt"))
+        assert not a.exists() and (tmp_path / "renamed.txt").read_bytes() == b"alpha\r\nbeta\r\n"
+        tab.run_command("typing")
+        assert not view.state.typing and view.state.caret_at is None
+    finally:
+        window._may_close = lambda pages: True
+        window.close()

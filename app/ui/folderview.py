@@ -569,7 +569,8 @@ class FolderView(QWidget):
 
     def __init__(self, session: FolderSession, tokens: dict[str, str], *,
                  mask: str = "", open_expanded: bool = False, layout: str = "trees",
-                 categories=None, parent: QWidget | None = None) -> None:
+                 categories=None, preview_copies: bool = False,
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.session = session
         self.model = FolderModel(self)
@@ -616,6 +617,8 @@ class FolderView(QWidget):
         self.show = F.SHOW_DIFFERENT
         self.totals: dict[str, int] = {}
         self.open_expanded = bool(open_expanded)
+        #: 1.23: copies of picked rows go straight to the queue unless this is on.
+        self.preview_copies = bool(preview_copies)
         self.mask = QLineEdit(mask)
         self.mask.setProperty("role", "findfield")
         self.mask.setPlaceholderText("*.ini;*.txt  -.git;-*.bak")
@@ -799,10 +802,6 @@ class FolderView(QWidget):
         root = session.tree
         if root is None:
             return
-        if session.syncing or self._queue:
-            self.status.emit("A sync is already with File Manager; this comparison is "
-                             "read again when it finishes.")
-            return
         refused = S.refusal(session.sides[0].path, session.sides[1].path)
         if refused:
             self.status.emit(refused)
@@ -837,14 +836,13 @@ class FolderView(QWidget):
         self._send_next()
 
     def _send_next(self) -> None:
+        """1.23: every request at once. File Manager's queue runs them in
+        turn; there is no reason to wait for one before handing it the next."""
         session = self.session
-        if not self._queue or session.syncing or session.busy:
-            return
-        if session.send_sync(self._queue[0]):
+        while self._queue and not session.building:
+            if not session.send_sync(self._queue[0], alongside=True):
+                break
             self._queue.pop(0)
-            if self._queue:
-                self.status.emit("Sent to File Manager; the other direction follows when "
-                                 "it finishes")
 
     def _list_command(self, name: str) -> None:
         if name == "toggle":
@@ -993,7 +991,8 @@ class FolderView(QWidget):
         session = self.session
         if session.tree is None or session.building:
             return
-        if session.syncing:
+        picked = mode in (S.COPY, S.REMOVE)
+        if session.syncing and not picked:
             self.status.emit("A sync is already with File Manager; this comparison is "
                              "read again when it finishes.")
             return
@@ -1010,12 +1009,51 @@ class FolderView(QWidget):
         finally:
             self._dialog = None
         if accepted and dialog.request:
-            session.send_sync(dialog.request)
+            session.send_sync(dialog.request, alongside=picked)
 
     def _picked(self, direction: str, mode: str) -> None:
         nodes = self.selected()
-        if nodes:
+        if not nodes:
+            return
+        if mode == S.COPY and not self.preview_copies:
+            self.send_copies(direction, nodes)
+        else:
             self.open_sync(direction, mode, nodes)
+
+    def send_copies(self, direction: str, nodes: list[F.Node]) -> bool:
+        """1.23: the picked rows straight to File Manager's queue, no preview
+        and no second question there. Picking the rows and pressing Copy is
+        the go-ahead, as it is in Beyond Compare. Any number of these can be
+        out at once: pick some folders, copy, pick more, copy again. Rows
+        that cannot be copied are said in the status line, not sent."""
+        session = self.session
+        if session.tree is None or session.building:
+            return False
+        refused = S.refusal(session.sides[0].path, session.sides[1].path)
+        if refused:
+            self.status.emit(refused)
+            return False
+        plan = S.plan(session.tree, direction, S.COPY, nodes=nodes)
+        way = "right" if direction == S.TO_RIGHT else "left"
+        skipped = plan.skipped
+        if not plan.copies:
+            why = skipped[0].why if skipped else "nothing there to copy"
+            self.status.emit(f"Nothing copied to the {way}: {why}")
+            return False
+        source, target = (session.sides[0], session.sides[1]) if direction == S.TO_RIGHT \
+            else (session.sides[1], session.sides[0])
+        request = S.request(plan, plan.copies, session.sides[0].path, session.sides[1].path,
+                            title=f"{source.title or source.path} -> "
+                                  f"{target.title or target.path}")
+        if not session.send_sync(request, alongside=True):
+            return False
+        files = sum(a.files if a.is_dir else 1 for a in plan.copies)
+        line = f"Copying {files:,} file{'s' if files != 1 else ''} to the {way}"
+        if skipped:
+            line += (f"; {len(skipped):,} left alone ({skipped[0].why}"
+                     + (" and others" if len(skipped) > 1 else "") + ")")
+        self.status.emit(line)
+        return True
 
     def copy_selected(self, direction: str) -> None:
         """The selected rows copied one way (1.14): the preview first, where
@@ -1031,11 +1069,8 @@ class FolderView(QWidget):
                              if done else f"None of these can be copied {way}")
             return
         if not self.selected():
-            self.status.emit("Select the files or folders to copy first")
-            return
-        if self.session.syncing:
-            self.status.emit("A sync is already with File Manager; this comparison is "
-                             "read again when it finishes.")
+            self.status.emit("Select the files or folders to copy first "
+                             "(Ctrl+click or Shift+click picks several)")
             return
         self._picked(direction, S.COPY)
 
@@ -1048,7 +1083,7 @@ class FolderView(QWidget):
         self.commandsChanged.emit()
 
     def can_copy(self) -> bool:
-        return (self.session.tree is not None and not self.session.syncing
+        return (self.session.tree is not None and not self.session.building
                 and bool(self.selected()))
 
     def _remote(self, sides) -> None:
@@ -1216,9 +1251,10 @@ class FolderView(QWidget):
                 menu.addAction("Use as the right folder",
                                lambda: self._rebase(here, "", right))
         menu.addSeparator()
-        ready = not self.session.syncing
-        for label, direction, mode in (("Copy to the right...", S.TO_RIGHT, S.COPY),
-                                       ("Copy to the left...", S.TO_LEFT, S.COPY),
+        ready = not self.session.building
+        dots = "..." if self.preview_copies else ""
+        for label, direction, mode in ((f"Copy to the right{dots}", S.TO_RIGHT, S.COPY),
+                                       (f"Copy to the left{dots}", S.TO_LEFT, S.COPY),
                                        ("Remove from the left...", S.TO_LEFT, S.REMOVE),
                                        ("Remove from the right...", S.TO_RIGHT, S.REMOVE)):
             action = menu.addAction(label, lambda d=direction, m=mode: self._picked(d, m))
@@ -1273,7 +1309,7 @@ class FolderView(QWidget):
         if id_ == "folder-list":
             return State(checked=listed)
         if id_ == "run-list":
-            return State(enabled=listed and ready and not session.syncing,
+            return State(enabled=listed and ready and not session.building,
                          visible=listed)
         if id_ in ("copy-left", "copy-right", "copy-from-side"):
             return State(enabled=self.can_copy())
@@ -1297,6 +1333,8 @@ class FolderView(QWidget):
             return State(enabled=ready)
         if id_ == "open-expanded":
             return State(checked=self.open_expanded)
+        if id_ == "preview-copies":
+            return State(checked=self.preview_copies)
         if id_ == "filter":
             return State()
         if id_ in ("copy-text", "select-all"):
@@ -1361,6 +1399,10 @@ class FolderView(QWidget):
         elif id_ == "open-expanded":
             self.open_expanded = not self.open_expanded
             self.setting.emit("folders.open_expanded", self.open_expanded)
+        elif id_ == "preview-copies":
+            self.preview_copies = not self.preview_copies
+            self.setting.emit("folders.preview_copies", self.preview_copies)
+            self.commandsChanged.emit()
         elif id_ == "filter":
             self.mask.setFocus(Qt.ShortcutFocusReason)
             self.mask.selectAll()

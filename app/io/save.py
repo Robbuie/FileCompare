@@ -216,3 +216,54 @@ def _replace_reason(exc: OSError) -> str:
 def _reason(exc: OSError) -> str:
     text = exc.strerror or str(exc)
     return text[0].upper() + text[1:] if text else "Could not be written"
+
+
+#: Characters Windows does not allow in a file name.
+BAD_NAME = set('<>:"/\\|?*') | {chr(c) for c in range(32)}
+#: Names Windows keeps for devices, whatever the extension.
+RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{n}" for n in range(1, 10)),
+            *(f"LPT{n}" for n in range(1, 10))}
+
+
+def name_problem(name: str) -> str:
+    """Why `name` cannot be a file's new name, or "". Pure: the dialog asks
+    this before anything goes near the disk."""
+    if not name or not name.strip():
+        return "A name is needed"
+    if name in (".", ".."):
+        return "Not a file name"
+    if any(ch in BAD_NAME for ch in name):
+        return 'A name cannot hold any of  \\ / : * ? " < > |'
+    if name.endswith((" ", ".")):
+        return "Windows drops a space or dot at the end of a name"
+    if name.split(".")[0].upper() in RESERVED:
+        return f"{name.split('.')[0]} is a name Windows keeps for a device"
+    return ""
+
+
+@dataclass
+class Renamed:
+    ok: bool
+    path: str
+    error: str = ""
+
+
+def rename(path: str, name: str) -> Renamed:
+    """1.23: the file at `path` given a new name in the same folder. Never
+    onto a file already there -- that would be a delete nobody asked for --
+    except when only the letters' case changes, which Windows treats as the
+    same name. Off the UI thread; never raises."""
+    problem = name_problem(name)
+    if problem:
+        return Renamed(False, path, problem)
+    folder, old = os.path.split(path)
+    target = os.path.join(folder, name)
+    if name == old:
+        return Renamed(True, path)
+    try:
+        if old.lower() != name.lower() and os.path.lexists(longpath.api(target)):
+            return Renamed(False, path, f"{name} is already there")
+        os.rename(longpath.api(path), longpath.api(target))
+    except OSError as exc:
+        return Renamed(False, path, _replace_reason(exc))
+    return Renamed(True, target)

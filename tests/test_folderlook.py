@@ -149,6 +149,9 @@ def test_f5_and_the_buttons_copy_the_selection_from_the_side_you_are_on(qt_app, 
         calls = []
         view.open_sync = lambda direction, mode, nodes=None: calls.append(
             (direction, mode, [n.name for n in nodes or []]))
+        # 1.23: a copy of picked rows goes straight to the queue, no preview.
+        view.send_copies = lambda direction, nodes: calls.append(
+            (direction, S.COPY, [n.name for n in nodes or []])) or True
         model = view.model
         # 1.17: the copy buttons are the window's toolbar now, asking the view.
         assert not window.command_state("copy-right").enabled   # nothing selected yet
@@ -299,5 +302,54 @@ def test_a_row_can_become_the_folders_compared(qt_app, tmp_path):
         assert _wait(lambda: view.session.tree is not None)
         assert tab.session.sides[0].path == left
     finally:
+        window._may_close = lambda pages: True
+        window.close()
+
+
+def test_several_folders_copy_at_once_and_more_can_follow_while_they_run(qt_app, tmp_path):
+    """1.23: Ctrl+click two rows and copy -- one request with both -- then
+    copy another row while File Manager still has the first."""
+    from PySide6.QtCore import QItemSelectionModel
+
+    from app.core import syncplan as S
+
+    window, tab = _folder_tab(qt_app, tmp_path)
+    try:
+        view = tab.folders
+        session = view.session
+        sent = []
+
+        def fake_send(request, *, alongside=False):
+            if session.syncing and not alongside:
+                return False
+            sent.append(request)
+            session.pending[f"r{len(sent)}.json"] = [0.0, True]   # File Manager has it
+            return True
+
+        session.send_sync = fake_send
+        model = view.model
+        rows = {model.node(model.index(r, 0)).name: r for r in range(model.rowCount())}
+        selection = view.tree.selectionModel()
+        selection.select(model.index(rows["sub"], 0),
+                         QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+        selection.select(model.index(rows["extra"], 0),
+                         QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        view.copy_selected(S.TO_RIGHT)
+        assert len(sent) == 1                    # no preview, straight to the queue
+        sources = sent[0]["jobs"][0]["sources"]
+        assert [p.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] for p in sources] == ["sub"]
+        selection.select(model.index(rows["extra"], 0),
+                         QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+        assert window.command_state("copy-left").enabled      # not held by the first
+        view.copy_selected(S.TO_LEFT)
+        assert len(sent) == 2 and session.syncing
+        # The preview is still there for whoever wants it.
+        view.preview_copies = True
+        previewed = []
+        view.open_sync = lambda d, m, nodes=None: previewed.append((d, m))
+        view.copy_selected(S.TO_RIGHT)
+        assert previewed == [(S.TO_RIGHT, S.COPY)]
+    finally:
+        session.pending.clear()
         window._may_close = lambda pages: True
         window.close()

@@ -126,12 +126,14 @@ def test_the_folder_tab_switches_to_the_list_and_sends_in_turn(qt_app, tmp_path,
         assert window.command_state("cat-lonly").count == 1
         assert not window.command_state("show-diffs").visible
         sent = []
-        monkeypatch.setattr(view.session, "send_sync", lambda request: sent.append(request) or True)
+        monkeypatch.setattr(view.session, "send_sync",
+                            lambda request, **_k: sent.append(request) or True)
         monkeypatch.setattr(QMessageBox, "exec", lambda self: 0)
         monkeypatch.setattr(QMessageBox, "clickedButton", lambda self: self.buttons()[0])
         view.run_list()
-        assert len(sent) == 1                    # the right first; the left waits its turn
-        assert view._queue and view._queue[0]["target_root"] == str(left)
+        # 1.23: both directions at once; File Manager's queue runs them in turn.
+        assert len(sent) == 2 and not view._queue
+        assert sent[1]["target_root"] == str(left)
         window.run_command("folder-trees")
         assert view.layout_name == "trees"
     finally:

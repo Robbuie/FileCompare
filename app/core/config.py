@@ -61,6 +61,8 @@ DEFAULTS: dict[str, Any] = {
     # sides) or "unified" (one column).
     "view.sidebar": True,
     "view.layout": "sbs",
+    # 1.23: click into a side and type, as in Beyond Compare (Ctrl+E).
+    "view.typing": False,
 
     # Seconds a side may take to load before it is shown as not answering.
     # Generous, because a large file on a slow share is not a dead one.
@@ -91,6 +93,9 @@ DEFAULTS: dict[str, Any] = {
     # folders the path boxes have shown lately, newest first.
     "folders.show": "different",
     "folders.open_expanded": False,
+    # 1.23: copying picked rows goes straight to File Manager's queue; on, it
+    # shows the preview with a box per row first, as before.
+    "folders.preview_copies": False,
     "folders.history": [],
     # 1.20: "trees" (the two trees) or "list" (the sync list), and the
     # categories the sync list shows.

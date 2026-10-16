@@ -162,6 +162,8 @@ class Options:
     folder_show: str = ""
     #: 1.15: open a folder compare with the differing folders expanded.
     folder_open_expanded: bool = False
+    #: 1.23: show the preview before copying picked rows.
+    folder_preview_copies: bool = False
     #: 1.15: folders shown lately, newest first, for the path boxes.
     folder_history: tuple[str, ...] = ()
     #: "auto" picks a format comparer by extension; "text" never does.
@@ -183,6 +185,8 @@ class Options:
     #: "sbs" (side by side), "fluid" or "unified".
     sidebar: bool = True
     layout: str = "sbs"
+    #: 1.23: Edit > Type in the panes.
+    typing: bool = False
     #: 1.20: folder compare's layout, "trees" or "list", and the sync list's
     #: categories shown.
     folder_layout: str = "trees"
@@ -195,6 +199,8 @@ class Session(QObject):
     changed = Signal()
     #: A save finished: (side index, `io_save.Saved`).
     saved = Signal(int, object)
+    #: 1.23: a rename finished: (side index, `io_save.Renamed`).
+    renamed = Signal(int, object)
 
     def __init__(self, loader: Loader, left: str, right: str, *,
                  options: Options | None = None, titles: tuple[str, str] = ("", ""),
@@ -232,6 +238,7 @@ class Session(QObject):
         self._save_requests: dict[int, int] = {}
         self._save_revision: dict[int, int] = {}
         self._probe_requests: dict[int, int] = {}
+        self._rename_requests: dict[int, int] = {}
         self._timers: list[QTimer | None] = [None, None]
         loader.finished.connect(self._finished)
         self._poll = QTimer(self)
@@ -395,6 +402,21 @@ class Session(QObject):
             return True
         return False
 
+    def type_edit(self, index: int, start: int, end: int, lines: list[str],
+                  group: str = "") -> bool:
+        """1.23: a key typed into a side -- `replace_lines`, except that keys
+        on the same line, one after another, are one undo step (`group`).
+        Line numbers are the document's own, so this does not wait for the
+        comparison to catch up with the last key."""
+        side = self.sides[index]
+        if not side.editable:
+            return False
+        if side.doc.replace(start, end, lines, group=group):
+            self._shift_pins(index, start, end - start, len(lines))
+            self._edited()
+            return True
+        return False
+
     def copy_block(self, block: int, to_side: int) -> bool:
         """The other side's lines of difference `block` replace this side's.
         Only against a current result: rows from before an edit would copy
@@ -545,6 +567,31 @@ class Session(QObject):
         self.saved.emit(index, result)
         self.changed.emit()
 
+    # ------------------------------------------------------------- rename
+
+    def rename(self, index: int, name: str) -> bool:
+        """1.23: give one side's file a new name in its folder. The text,
+        its edits and its undo stay as they are; only the path moves."""
+        side = self.sides[index]
+        if not side.path or side.kind != io_kind.FILE or side.saving \
+                or index in self._rename_requests.values():
+            return False
+        request = self._loader.submit(io_save.rename, side.path, name)
+        self._rename_requests[request] = index
+        return True
+
+    def _rename_done(self, index: int, envelope: Envelope) -> None:
+        side = self.sides[index]
+        if envelope.ok:
+            result = envelope.value
+        else:
+            result = io_save.Renamed(False, side.path, envelope.error)
+        if result.ok and result.path != side.path:
+            side.path = result.path
+            side.title = ""
+        self.renamed.emit(index, result)
+        self.changed.emit()
+
     # ------------------------------------------------------------- the disk
 
     def _look_at_disk(self) -> None:
@@ -633,6 +680,9 @@ class Session(QObject):
             return
         if request in self._probe_requests:
             self._probe_done(self._probe_requests.pop(request), envelope)
+            return
+        if request in self._rename_requests:
+            self._rename_done(self._rename_requests.pop(request), envelope)
             return
         if request == self._compare_request:
             self._compare_request = 0

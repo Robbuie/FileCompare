@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.23.0 - typing in the panes, and copies that go straight to the queue
+
+- **Type straight into either side.** Edit > Type in the panes (Ctrl+E, or
+  Type on the toolbar) turns on a caret: click where you want it and type,
+  as in Beyond Compare. Left, Right, Home and End move along the line
+  (Ctrl+Left/Right by word), Up and Down and the page keys move between
+  lines, Enter splits the line keeping its indent, Backspace and Delete join
+  lines at their ends, Tab types a tab, and Ctrl+V pastes. Clicking a blank
+  filler row puts the caret on a new line there. The comparison runs again
+  as you type. Undo takes back a run of typing on one line in one step.
+  Ctrl+E again turns it off, and then a click selects lines and F2 opens the
+  line editor as before. Typing works in Side by side only, and a read-only
+  side says why it cannot be changed.
+- **Save to either side.** File > Save left and Save right save one side
+  whichever side you are on. File > "Save left's text into the right file"
+  (and the reverse, also on each side's menu) makes the other side this
+  side's text and saves it, keeping that file's own encoding and line
+  endings. It asks first, and Ctrl+Z on that side takes it back.
+- **Rename a side's file** from File > Rename this side's file, or the
+  side's menu. It renames within the same folder and never onto a file that
+  is already there. Edits and undo carry on, and the next save writes under
+  the new name.
+- **Copying selected rows in a folder compare goes straight to File
+  Manager's queue.** No preview here, and File Manager (0.58) no longer
+  comes to the front to ask again, so one click copies. Select several
+  folders or files with Ctrl+click or Shift+click to copy them together.
+  You can also copy more while earlier copies are still running. Before,
+  every other copy was refused until File Manager answered, which made it
+  one folder at a time. The comparison is read again when the last copy
+  finishes. Rules > Preview copies before sending brings the preview back.
+  Removals, and the Update and Mirror syncs, still show their preview. The
+  sync list's Run now sends both directions at once.
+
 ## 1.22.0 - differences by contents, and saves refused up front
 
 - **Folder compare marks a file as different for its contents, not its

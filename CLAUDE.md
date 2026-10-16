@@ -166,6 +166,11 @@ Holds what the UI renders.
   and the request File Manager's `core/handoff.py` reads. Pure.
 - `core/document.py` -- one side's text while it is edited: lines, their
   endings, and undo/redo as splices. Pure; the tests prove it alone.
+  (1.23) Keys typed on one line share a `group` and fold into one undo step.
+- `core/caret.py` -- typing in the panes (1.23): the caret as a side's line
+  and character, and what each key makes of it as one splice. Pure. The
+  view only reports clicks and keys (`caretPlaced`, `caretKey`); the tab
+  owns the caret and places it on the rows after every diff.
 - `core/loader.py` -- runs work off the UI thread and hands the answer back
   on it, always as a queued event (see "Things that will bite you").
 - `core/instance.py` -- the single-instance socket.

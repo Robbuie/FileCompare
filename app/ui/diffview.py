@@ -110,6 +110,11 @@ class ViewState:
     before: tuple = ((), ())
     #: 1.19, Unified: a heading per difference, by block, from the tab.
     headings: dict = field(default_factory=dict)
+    #: 1.23: Edit > Type in the panes. The caret is the tab's (`core/caret.py`,
+    #: in the side's own line numbers); `caret_at` is where the tab last put
+    #: it on screen, `(side, row, display column)`, or None.
+    typing: bool = False
+    caret_at: tuple | None = None
 
     # ------------------------------------------------ display space (1.18)
 
@@ -500,11 +505,52 @@ class _Painted(QWidget):
 class TextPane(_Painted):
     """One side's rows: line numbers, washes, marks, text."""
 
+    #: 1.23, typing: (row, display column) clicked, for the caret.
+    placed = Signal(int, int)
+
     def __init__(self, state: ViewState, side: int, parent: QWidget | None = None) -> None:
         super().__init__(state, parent)
         self.side = side
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumWidth(120)
+
+    def column_at(self, x: float) -> int:
+        """The display column under `x`, rounded to the nearer gap."""
+        text_x = self.number_width() + 8
+        return max(0, int(round((x - text_x + self.state.x) / max(1.0, self.char_w))))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        s = self.state
+        if (s.typing and s.layout == "sbs" and event.button() == Qt.LeftButton
+                and not event.modifiers() & Qt.ShiftModifier
+                and event.position().x() > self.number_width()
+                and s.fold_of(self.line_at(event.position().y())) is None and s.rows):
+            super().mousePressEvent(event)
+            self.placed.emit(self.row_at(event.position().y()),
+                             self.column_at(event.position().x()))
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if self.state.typing and self.state.layout == "sbs":
+            return                  # a second click on the caret, not the line editor
+        super().mouseDoubleClickEvent(event)
+
+    def _paint_caret(self, painter: QPainter, text_x: float) -> None:
+        s = self.state
+        at = s.caret_at
+        if not s.typing or at is None or at[0] != self.side or not s.rows:
+            return
+        row, column = at[1], at[2]
+        if not 0 <= row < len(s.rows) or s.hidden(row):
+            return
+        y = (s.display_of(row) - s.first) * self.row_h
+        if y < -self.row_h or y > self.height():
+            return
+        x = text_x + column * self.char_w - s.x
+        if x < text_x - 1:
+            return
+        painter.fillRect(QRectF(x - 1, y + 2, 2, self.row_h - 4), self.colour("accent"))
 
     def number_width(self) -> float:
         count = max(1, len(self.state.lines[self.side]))
@@ -691,6 +737,7 @@ class TextPane(_Painted):
         if s.rows and end <= s.first + self.visible_rows():
             # Past the last row: the pane's own surface, nothing else.
             pass
+        self._paint_caret(painter, text_x)
         self._paint_current(painter)
         painter.setPen(QPen(self.colour("line_soft"), 1))
         painter.drawLine(int(numbers), 0, int(numbers), self.height())
@@ -1497,6 +1544,13 @@ class DiffView(QWidget):
     menuRequested = Signal(object)
     #: (side, first row, stop row, new text), from the line editor.
     edited = Signal(int, int, int, str)
+    #: 1.23, typing: a click put the caret here, (side, row, display column).
+    caretPlaced = Signal(int, int, int)
+    #: 1.23, typing: a key for the caret -- (what, text): "insert" with the
+    #: text, "backspace", "delete", "enter", a move ("left", "right",
+    #: "home", "end", "word-left", "word-right"), or "rows" when up, down or
+    #: a page moved the cursor and the caret should follow it.
+    caretKey = Signal(str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1543,6 +1597,7 @@ class DiffView(QWidget):
             pane.pressed.connect(lambda row, extend, sd=side: self._press(sd, row, extend))
             pane.dragged.connect(lambda row, sd=side: self._press(sd, row, True))
             pane.doubleClicked.connect(lambda row, sd=side: self._double(sd, row))
+            pane.placed.connect(lambda row, col, sd=side: self.caretPlaced.emit(sd, row, col))
         self.gutter.copyRequested.connect(self.copyBlock)
         self.gutter.copyRowsRequested.connect(self.copyRows)
         for side, pane in enumerate((self.left, self.right)):
@@ -1811,7 +1866,8 @@ class DiffView(QWidget):
 
     def _double(self, side: int, row: int) -> None:
         self._press(side, row, False)
-        self.command.emit("edit")
+        if not self.state.typing:
+            self.command.emit("edit")
 
     def move_cursor(self, rows: int, extend: bool) -> None:
         s = self.state
@@ -1891,6 +1947,31 @@ class DiffView(QWidget):
                                 int(pane.width() - numbers), int(max(height, pane.row_h * 2)))
         self.editor.begin(side, (lo, hi), text, self._font)
         return True
+
+    def show_caret(self, side: int | None, row: int = 0, column: int = 0) -> None:
+        """1.23: put the caret on screen, scrolling to it; None hides it."""
+        s = self.state
+        if side is None:
+            s.caret_at = None
+            self.update_all()
+            return
+        s.caret_at = (side, row, column)
+        if s.side != side:
+            s.side = side
+            self.currentChanged.emit()
+        s.cursor = s.anchor = row
+        self._expose(row)
+        self.reveal(row)
+        pane = self.left if side == 0 else self.right
+        columns = pane.text_columns()
+        first = int(s.x // max(1.0, pane.char_w))
+        if column < first + 2:
+            self.hbar.setValue(max(0, column - 8))
+        elif column > first + columns - 3:
+            if self.hbar.maximum() < column - columns + 8:
+                self.hbar.setRange(0, column - columns + 8)
+            self.hbar.setValue(column - columns + 8)
+        self.update_all()
 
     def _editor_done(self, side: int, lo: int, hi: int, text: str) -> None:
         self.setFocus(Qt.OtherFocusReason)
@@ -2015,14 +2096,85 @@ class DiffView(QWidget):
         # 1.19: Unified on and off, and the differences list.
         (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_I): "toggle-unified",
         (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_D): "sidebar",
+        # 1.23: typing straight into the panes, on and off.
+        (Qt.ControlModifier, Qt.Key_E): "typing",
     }
 
+    #: 1.23, typing: keys that move the caret along its line, by modifiers.
+    CARET_MOVES = {
+        (Qt.NoModifier, Qt.Key_Left): "left", (Qt.NoModifier, Qt.Key_Right): "right",
+        (Qt.NoModifier, Qt.Key_Home): "home", (Qt.NoModifier, Qt.Key_End): "end",
+        (Qt.ControlModifier, Qt.Key_Left): "word-left",
+        (Qt.ControlModifier, Qt.Key_Right): "word-right",
+    }
+
+    def _typing_key(self, event) -> bool:
+        """1.23: a key while typing in the panes. True when it was the
+        caret's; everything else (Ctrl+S, Alt+arrows, F-keys) goes on to the
+        ordinary keys below."""
+        s = self.state
+        if not s.typing or s.layout != "sbs" or s.caret_at is None or not s.rows:
+            return False
+        key = event.key()
+        mods = event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier)
+        move = self.CARET_MOVES.get((mods, key))
+        if move is not None:
+            self.caretKey.emit(move, "")
+            return True
+        if mods == Qt.NoModifier and key == Qt.Key_Backspace:
+            self.caretKey.emit("backspace", "")
+            return True
+        if mods == Qt.NoModifier and key == Qt.Key_Delete:
+            self.caretKey.emit("delete", "")
+            return True
+        if mods in (Qt.NoModifier, Qt.ShiftModifier) and key in (Qt.Key_Return, Qt.Key_Enter):
+            self.caretKey.emit("enter", "")
+            return True
+        if mods == Qt.NoModifier and key == Qt.Key_Tab:
+            self.caretKey.emit("insert", "\t")
+            return True
+        if (mods == Qt.ControlModifier and key == Qt.Key_V) or \
+                (mods == Qt.ShiftModifier and key == Qt.Key_Insert):
+            from PySide6.QtWidgets import QApplication
+
+            text = QApplication.clipboard().text()
+            if text:
+                self.caretKey.emit("insert", text)
+            return True
+        if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown) \
+                and not mods & (Qt.AltModifier | Qt.ControlModifier):
+            return False            # moved below, then "rows" puts the caret there
+        text = event.text()
+        if text and not mods & (Qt.ControlModifier | Qt.AltModifier) \
+                and all(ch.isprintable() for ch in text):
+            self.caretKey.emit("insert", text)
+            return True
+        return False
+
     def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._typing_key(event):
+            event.accept()
+            return
         key = event.key()
         mods = event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier)
         shift = bool(mods & Qt.ShiftModifier)
         plain = mods & ~Qt.ShiftModifier
         page = max(1, self._lead().visible_rows() - 1)
+        if self.state.typing and self.state.caret_at is not None and \
+                key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown) and \
+                not mods & (Qt.AltModifier | Qt.ControlModifier):
+            # Up and down are rows, and only the view has them: move the
+            # cursor as ever, then the tab puts the caret on its row.
+            self.state.cursor = self.state.caret_at[1]
+            self.state.anchor = self.state.cursor
+            rows = {Qt.Key_Up: -1, Qt.Key_Down: 1, Qt.Key_PageUp: -page,
+                    Qt.Key_PageDown: page}[key]
+            if abs(rows) > 1:
+                self.scroll_by(rows)
+            self.move_cursor(rows, shift)
+            self.caretKey.emit("rows", "")
+            event.accept()
+            return
         command = self.COMMANDS.get((mods, key))
         if command is not None:
             self.command.emit(command)

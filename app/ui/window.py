@@ -66,6 +66,8 @@ Alt+Right / Alt+Left      copy the selected lines, or this difference, right, le
 Ctrl+Alt+Right / Left     copy everything right, left
 Enter, F2, double-click   edit the selected lines (Ctrl+Enter keeps, Esc drops)
 Shift+Enter               insert an empty line below
+Ctrl+E                    type in the panes: click to place the caret, then type;
+                          Left/Right/Home/End move it, Enter splits, Tab is a tab
 Right-click               copy, edit and align from a menu
 F5 (folders)              copy the selected rows from the side you're on
 Alt+Right / Left (folders) copy the selected rows right, left
@@ -320,6 +322,7 @@ class MainWindow(QMainWindow):
             folder_archives=bool(self._config.get("folders.archives")),
             folder_show=str(self._config.get("folders.show") or ""),
             folder_open_expanded=bool(self._config.get("folders.open_expanded")),
+            folder_preview_copies=bool(self._config.get("folders.preview_copies")),
             folder_history=tuple(str(p) for p in self._config.get("folders.history") or []
                                  if isinstance(p, str))[:20],
             mode=mode,
@@ -330,6 +333,7 @@ class MainWindow(QMainWindow):
             details=bool(self._config.get("view.details")),
             sidebar=bool(self._config.get("view.sidebar")),
             layout=str(self._config.get("view.layout") or "sbs"),
+            typing=bool(self._config.get("view.typing")),
             folder_layout=str(self._config.get("folders.layout") or "trees"),
             folder_categories=tuple(self._config.get("folders.categories") or ()),
             file_history=self._file_history(),

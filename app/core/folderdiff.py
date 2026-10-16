@@ -106,18 +106,22 @@ class FolderSession(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(int(self.TICK * 1000))
         self._timer.timeout.connect(self._tick)
-        # 1.0: the sync handoff. One request outstanding per tab: the tree
-        # is walked again when its result arrives, and a second sync planned
-        # from the tree before that would be planned from stale verdicts.
-        self._send_request = 0
-        self._poll_request = 0
+        # 1.0: the sync handoff. 1.23: any number outstanding. Copies of
+        # picked rows are sent as they are asked for -- one folder, then
+        # another, while the first is still running -- because File Manager's
+        # queue runs them one after another anyway. The tree is walked again
+        # once the last of them has answered. A whole-tree sync (update,
+        # mirror) still waits for the others, since it is planned from every
+        # verdict and a mirror removes by them.
+        self._sends: dict[int, float] = {}          # loader request -> sent at
+        self._polls: dict[int, str] = {}            # loader request -> request file
         self._remote_request = 0
-        self.pending = ""                # the request file File Manager has
+        #: Request files File Manager has: path -> [sent at, taken].
+        self.pending: dict[str, list] = {}
         self._poll = QTimer(self)
         self._poll.setInterval(int(self.POLL * 1000))
         self._poll.timeout.connect(self._look_for_result)
-        self._sent_at = 0.0
-        self._taken = False
+        self._walk_after = False
 
     # ------------------------------------------------------------ the state
 
@@ -300,75 +304,100 @@ class FolderSession(QObject):
 
     @property
     def syncing(self) -> bool:
-        return bool(self._send_request or self.pending)
+        """Anything with File Manager that has not answered yet."""
+        return bool(self._sends or self.pending)
 
     def check_remote(self) -> None:
         """Ask whether either side is on a share; `remote` answers."""
         self._remote_request = self._loader.submit(
             io_handoff.remote_sides, self.sides[0].path, self.sides[1].path)
 
-    def send_sync(self, request: dict) -> bool:
-        """Hand the jobs to File Manager. False if one is already out."""
-        if self.syncing or self.building or not request.get("jobs"):
+    def send_sync(self, request: dict, *, alongside: bool = False) -> bool:
+        """Hand the jobs to File Manager. `alongside` (1.23, picked rows)
+        sends even while others are out; otherwise False if one is."""
+        if self.building or not request.get("jobs"):
             return False
-        self._sent_at = time.monotonic()
-        self._taken = False
-        self._send_request = self._loader.submit(io_handoff.send, request)
+        if self.syncing and not alongside:
+            return False
+        self._sends[self._loader.submit(io_handoff.send, request)] = time.monotonic()
         self.handed.emit("Sending to File Manager...")
         return True
 
     def forget_sync(self) -> None:
-        """Stop waiting for File Manager's result. The jobs, if File Manager
+        """Stop waiting for File Manager's results. The jobs, if File Manager
         took them, carry on in its queue; only this tab stops listening --
         for a File Manager older than 0.46, which never writes one."""
         self._poll.stop()
-        self.pending = ""
-        self._poll_request = 0
+        self.pending = {}
+        self._polls = {}
         self.changed.emit()
 
     def _look_for_result(self) -> None:
-        if self.pending and not self._poll_request:
-            self._poll_request = self._loader.submit(io_handoff.result, self.pending)
+        asked = set(self._polls.values())
+        for path in self.pending:
+            if path not in asked:
+                self._polls[self._loader.submit(io_handoff.result, path)] = path
 
     def _handoff_answer(self, request: int, envelope: Envelope) -> bool:
         if request == self._remote_request:
             self._remote_request = 0
             self.remote.emit(envelope.value if envelope.ok else (False, False))
             return True
-        if request == self._send_request:
-            self._send_request = 0
+        if request in self._sends:
+            sent_at = self._sends.pop(request)
             if envelope.ok:
-                self.pending, _program = envelope.value
+                path, _program = envelope.value
+                self.pending[path] = [sent_at, False]
                 self._poll.start()
-                self.handed.emit("Handed to File Manager's queue. This comparison "
-                                 "is read again when the jobs finish.")
+                waiting = len(self.pending)
+                self.handed.emit(
+                    "Added to File Manager's queue. This comparison is read again when "
+                    + ("the jobs finish." if waiting == 1
+                       else f"all {waiting} finish."))
             else:
                 self.handed.emit("Could not hand the sync to File Manager: "
                                  + (envelope.error.split(": ", 1)[-1] if envelope.error
                                     else "unknown"))
             self.changed.emit()
             return True
-        if request == self._poll_request:
-            self._poll_request = 0
+        if request in self._polls:
+            path = self._polls.pop(request)
+            entry = self.pending.get(path)
+            if entry is None:
+                return True                       # forgotten meanwhile
             state, outcome = envelope.value if envelope.ok else (io_handoff.WAITING, None)
             if state == io_handoff.TAKEN:
-                self._taken = True
+                entry[1] = True
             if outcome is None:
-                if not self._taken and time.monotonic() - self._sent_at > self.TAKE_SECONDS:
+                if not entry[1] and time.monotonic() - entry[0] > self.TAKE_SECONDS:
                     # Nothing took it: no File Manager that reads requests
                     # (0.46 or later), or one that refused it before it could
                     # say so. Stop waiting rather than hold every later sync.
-                    self.forget_sync()
+                    self.pending.pop(path, None)
                     self.handed.emit("File Manager did not take the sync. It needs File "
                                      "Manager 0.46 or later; nothing was copied or "
                                      "removed.")
+                    self._after_answer()
                 return True
-            self._poll.stop()
-            self.pending = ""
+            self.pending.pop(path, None)
             self.handed.emit(describe(outcome))
-            self.start()
+            self._after_answer(walk=True)
             return True
         return False
+
+    def _after_answer(self, walk: bool = False) -> None:
+        """One request settled. The folders are read again once none is left
+        out, so the tree shows what all of them did."""
+        self._walk_after = self._walk_after or walk
+        if self.pending or self._sends:
+            self.changed.emit()
+            return
+        self._poll.stop()
+        if self._walk_after:
+            self._walk_after = False
+            self.start()
+        else:
+            self.changed.emit()
 
     def paths(self, node: folders.Node) -> tuple[str, str]:
         return _join(self.sides[0].path, node.rel), _join(self.sides[1].path, node.rel)
