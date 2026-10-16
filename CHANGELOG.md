@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.26.0 - rungs with whole tag names, and a routine list that stays short
+
+- **Tag names are drawn whole in the rung view.** Each instruction is as
+  wide as its text, as in Logix Designer, instead of a fixed cell that cut
+  long names short. A contact or coil widens for a long tag and breaks it
+  over two lines after a `.` or `_`. A box widens for its longest operand,
+  up to the width of its half, and past that carries the operand onto the
+  next line rather than cutting it. Operands sit in a column after their
+  labels.
+- **Hovering an instruction shows that instruction**, its name, what it is
+  and every operand with its label ("Preset:  2500"), rather than the whole
+  rung's text. Hovering elsewhere on a rung still shows the rung's text.
+- **The routine list is a tree, and only lists what changed.** Programs and
+  Add-On Instructions are folders, as in the Controller Organizer, each
+  program or AOI under them by its own name with its routines inside. While
+  Differing rungs is on, only the routines with a differing rung are listed,
+  and a line at the bottom says how many unchanged ones are left out. All
+  rungs lists every routine, with the programs folded when there are many.
+  A box at the top filters by routine, program or AOI name.
+- Clicking a program shows all of its routines' rungs; clicking its arrow
+  folds it.
+- Fixed: a changed operand's highlight covered its label ("Preset").
+
 ## 1.25.2 - the release check reports what the tests say
 
 - The release and verify checks run the tests through `tools/run_tests.py`,

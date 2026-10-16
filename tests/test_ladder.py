@@ -183,3 +183,72 @@ def test_differences_outside_rungs_are_counted_for_the_rung_view():
     crumbs = ["Tags", "Program P / R", "Program P / R / Rung 0"]
     pairs = L.pairs(result.rows, left, right, crumbs, crumbs)
     assert L.routine_of(pairs[0]) == "Program P / R"
+
+
+def test_layout_takes_the_views_sizes():
+    rung = L.parse("XIC(A)MOV(Source,Dest)OTE(B)")
+    sized = L.layout(rung, size=lambda i: (3.5, 2) if i.shape == "box" else (1.5, 1))
+    assert [p.w for p in sized.placed] == [1.5, 3.5, 1.5]
+    assert sized.height == 2 and sized.width == 6.5
+    assert L.layout(rung).placed[1].w == L.BOX_WIDTH      # the default
+
+
+def test_long_tags_are_drawn_whole(qt_app):
+    """1.26: an instruction is as wide as its text, a long tag is broken at a
+    `.` or `_` and not cut, and a box past the half's width wraps."""
+    from PySide6.QtGui import QFontMetricsF
+
+    from app.ui import rungview as R
+
+    view = R.RungView()
+    view.resize(1400, 700)
+    canvas = view.canvas
+    canvas._metrics()
+    canvas._cap = 6.0
+    long = "Line4_Station03_Robot_Interface.Output_Data.Pass_Count"
+    contact = L.instructions(L.parse(f"XIC({long})"))[0]
+    w, _h = canvas._size(contact)
+    lines = R._wrap(long, canvas.fm, w * canvas.cell_w - 6)
+    assert "".join(lines) == long and len(lines) <= 2
+    assert all(line.endswith(("_", ".")) for line in lines[:-1])
+    box = L.instructions(L.parse(f"MOV(Short,{long})"))[0]
+    bw, _bh = canvas._size(box)
+    assert bw > L.BOX_WIDTH
+    rows = canvas._box_rows(box, bw * canvas.cell_w - 16)
+    assert ["".join(v) for _l, v in rows] == ["Short", long]
+    # Narrower than the value: wrapped, nothing lost.
+    canvas._cap = 2.5
+    bw2, bh2 = canvas._size(L.instructions(L.parse(f"CPT(Dest,{long}*{long})"))[0])
+    assert bw2 == 2.5
+    rows = canvas._box_rows(L.instructions(L.parse(f"CPT(Dest,{long}*{long})"))[0],
+                            bw2 * canvas.cell_w - 16)
+    assert "".join(rows[1][1]) == f"{long}*{long}" and len(rows[1][1]) > 1
+    assert QFontMetricsF(view.mono)            # fonts exist
+    tip = R.describe(L.instructions(L.parse("TON(T,5000,0)"))[0])
+    assert tip.splitlines() == ["TON  Timer On Delay", "Timer:  T", "Preset:  5000",
+                                "Accum:  0"]
+    assert R.describe(contact).splitlines() == ["XIC  Examine If Closed", long]
+
+
+def test_the_routine_list_lists_what_changed_and_folds_the_rest(qt_app):
+    from app.ui import rungview as R
+
+    def pair(where, differs):
+        rung = L.Rung("Rung: XIC(A);", f"{where} / Rung 0")
+        return L.RungPair(rung, rung, differs)
+
+    pairs = [pair(f"Program P{n} / R{k}", n == 3 and k == 1)
+             for n in range(8) for k in range(4)] + [pair("AOI Valve / Logic", True)]
+    listing = R.RoutineList()
+    listing.set_pairs(pairs, R.ALL, changed_only=True)
+    keys = set(listing._items)
+    assert keys == {R.ALL, "Program P3", "Program P3 / R1", "AOI Valve / Logic"}
+    assert "31 unchanged routines" in listing.summary.text()
+    listing.set_changed_only(False)
+    assert len([k for k in listing._items if " / " in k]) == 33
+    program = listing._items["Program P5"]
+    assert not program.isExpanded()            # a long list starts folded
+    listing.filter.setText("p5 r2")
+    shown = [k for k, item in listing._items.items() if not item.isHidden()]
+    assert set(shown) == {R.ALL, "Program P5", "Program P5 / R2"}
+    assert R.in_routine(pairs[0], "Program P0") and not R.in_routine(pairs[0], "Program P1")

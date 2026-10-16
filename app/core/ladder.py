@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from typing import Sequence, Union
+from typing import Callable, Sequence, Union
 
 from app.core.diff import align
 
@@ -358,30 +358,42 @@ def _box_rows(instr: Instr) -> int:
     return max(1, -(-max(lines, pins) // BOX_LINES))
 
 
-def _measure(item) -> tuple[float, int]:
+#: How big one instruction is, in (cells across, rows down). The view
+#: passes its own, which measures the text it will draw (1.26); without one,
+#: every contact is a cell and every box BOX_WIDTH.
+Sizer = Callable[[Instr], tuple[float, int]]
+
+
+def default_size(instr: Instr) -> tuple[float, int]:
+    if instr.shape == "box":
+        return float(BOX_WIDTH), _box_rows(instr)
+    return 1.0, 1
+
+
+def _measure(item, size: Sizer = default_size) -> tuple[float, int]:
     if isinstance(item, Instr):
-        if item.shape == "box":
-            return float(BOX_WIDTH), _box_rows(item)
-        return 1.0, 1
+        return size(item)
     if isinstance(item, Series):
         w, h = 0.0, 1
         for child in item.items:
-            cw, ch = _measure(child)
+            cw, ch = _measure(child, size)
             w += cw
             h = max(h, ch)
         return w, h
-    widths = [_measure(leg) for leg in item.legs] or [(0.0, 1)]
+    widths = [_measure(leg, size) for leg in item.legs] or [(0.0, 1)]
     return max(w for w, _h in widths) + 2 * BRANCH_PAD, sum(h for _w, h in widths)
 
 
-def layout(series: Series, max_width: float = 0.0) -> Layout:
-    """Place a rung. `max_width` (cells, 0 for none) wraps the top level."""
+def layout(series: Series, max_width: float = 0.0, size: Sizer | None = None) -> Layout:
+    """Place a rung. `max_width` (cells, 0 for none) wraps the top level;
+    `size` says how big each instruction is (`default_size` when None)."""
+    size = size or default_size
     out = Layout()
     counter = [0]
 
     def place(item, x: float, y: int) -> tuple[float, int]:
         if isinstance(item, Instr):
-            w, h = _measure(item)
+            w, h = size(item)
             out.placed.append(Placed(item, counter[0], x, y, w, h))
             counter[0] += 1
             return w, h
@@ -392,7 +404,7 @@ def layout(series: Series, max_width: float = 0.0) -> Layout:
                 cx += cw
                 h = max(h, ch)
             return cx - x, h
-        total_w, _total_h = _measure(item)
+        total_w, _total_h = _measure(item, size)
         left, right = x + BRANCH_PAD, x + total_w - BRANCH_PAD
         row = y
         last = y
@@ -411,7 +423,7 @@ def layout(series: Series, max_width: float = 0.0) -> Layout:
 
     x, y, line_h = 0.0, 0, 1
     for item in series.items:
-        w, h = _measure(item)
+        w, h = _measure(item, size)
         if max_width and x > 0 and x + w > max_width:
             y += line_h
             out.lines.append(y)
