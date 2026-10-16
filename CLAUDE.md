@@ -66,6 +66,7 @@ pip install pytest                      # tests only, not shipped
 pip install -r packaging/requirements-build.txt   # building an installer
 
 pytest                                  # engine, reader, rules, CLI, session, window
+python tools/run_tests.py               # what CI runs: pytest, then out without DLL teardown
 python -m app                           # empty window, the start page
 python -m app left.txt right.txt        # a text compare
 python -m app C:\A D:\B                 # two folders: says folder compare is not here yet

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.25.2 - the release check reports what the tests say
+
+- The release and verify checks run the tests through `tools/run_tests.py`,
+  ported from File Manager. On the Windows build machine the suite passed
+  ("466 passed") and the process then crashed while unloading libraries on
+  the way out, which reported a green run as a failure. The script leaves
+  with pytest's own verdict and skips that teardown. A crash during the
+  tests still fails the run. Nothing in the application changed.
+
 ## 1.25.1 - folder halves the same width again
 
 - In a folder compare, the two name columns could come out a pixel apart

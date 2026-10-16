@@ -57,10 +57,16 @@ jobs:
             exit 1
           fi
 
+      # pytest's verdict, and nothing after it. On this runner the suite
+      # passes and the interpreter then crashes on the way out, in DLL
+      # teardown -- see tools/run_tests.py, which ends the process without
+      # running any. Bash rather than PowerShell, so the shell is not a
+      # second thing that can decide the result.
       - name: Tests
+        shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest -q
+        run: python tools/run_tests.py
 
       # Inno Setup 6 ships on the Windows runner image. Installing it here is
       # for the day it does not, which is the sort of thing that changes
