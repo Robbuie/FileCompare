@@ -129,6 +129,12 @@ def test_each_side_has_its_own_names_and_only_its_side_is_washed(qt_app, tmp_pat
     header = tab.folders.tree.header()
     assert header.sectionSize(V.LNAME) == header.sectionSize(V.RNAME)
     assert header.sectionSize(V.LTIME) == header.sectionSize(V.RTIME)
+    # 1.25.1: whatever the width, odd included -- the odd pixel goes to the
+    # verdict column, never to one side.
+    for width in (1601, 1602, 1777):
+        window.resize(width, 700)
+        QCoreApplication.processEvents()
+        assert header.sectionSize(V.LNAME) == header.sectionSize(V.RNAME), width
     left = sum(header.sectionSize(c) for c in V.LEFT_COLUMNS)
     assert abs(tab.heads[0].width() - left) <= 2
     assert tab._head_spacer.width() == header.sectionSize(V.VERDICT)

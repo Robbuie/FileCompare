@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.25.1 - folder halves the same width again
+
+- In a folder compare, the two name columns could come out a pixel apart
+  at some window widths since 1.25.0 took the border off the comparison,
+  which made the release check fail. The names are now sized by File
+  Compare itself, always equal, and the odd pixel goes to the verdict
+  column between them.
+
 ## 1.25.0 - the new look, part one: Slate, one command row, linked panes
 
 The look chosen from the mockups (D and E together), for text comparisons.

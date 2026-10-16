@@ -601,13 +601,16 @@ class FolderView(QWidget):
         header.setStretchLastSection(False)
         header.setSectionsMovable(False)
         header.setMinimumSectionSize(28)
-        # Both names stretch and everything else is a fixed width worked out
-        # from the font, the same on both sides, so the halves are always the
-        # same width and the verdict column sits in the middle (1.12).
-        for column in (LNAME, RNAME):
-            header.setSectionResizeMode(column, QHeaderView.Stretch)
-        for column in (LSIZE, LTIME, VERDICT, RSIZE, RTIME):
+        # Everything but the names is a fixed width worked out from the font,
+        # the same on both sides, and the names share what is left, so the
+        # halves are always the same width and the verdict column sits in the
+        # middle (1.12). 1.25.1: the names are sized here rather than left to
+        # Qt's Stretch, which hands an odd pixel to one side -- the panes no
+        # longer have a border, and the window's width is as often odd as
+        # even. The verdict column takes that pixel instead.
+        for column in (LNAME, RNAME, LSIZE, LTIME, VERDICT, RSIZE, RTIME):
             header.setSectionResizeMode(column, QHeaderView.Fixed)
+        self.tree.viewport().installEventFilter(self)
         header.sectionResized.connect(lambda *_a: self._emit_split())
 
         # 1.17: the show filter, Compare contents, Sync, the copies and
@@ -726,10 +729,28 @@ class FolderView(QWidget):
         size = metrics.horizontalAdvance("9,999.9 MB") + 22
         time = metrics.horizontalAdvance("2026-12-31 23:59:59") + 26
         header = self.tree.header()
-        for column, width in ((LSIZE, size), (RSIZE, size), (LTIME, time), (RTIME, time),
-                              (VERDICT, 34)):
+        for column, width in ((LSIZE, size), (RSIZE, size), (LTIME, time), (RTIME, time)):
             header.resizeSection(column, width)
+        self._balance()
+
+    #: The verdict column's width, before the odd pixel it may take.
+    VERDICT_W = 34
+
+    def _balance(self) -> None:
+        """The two names the same width, filling the viewport (1.25.1)."""
+        header = self.tree.header()
+        fixed = sum(header.sectionSize(c) for c in (LSIZE, LTIME, RSIZE, RTIME))
+        spare = max(2 * 60, self.tree.viewport().width() - fixed - self.VERDICT_W)
+        name = spare // 2
+        header.resizeSection(VERDICT, self.VERDICT_W + spare - 2 * name)
+        header.resizeSection(LNAME, name)
+        header.resizeSection(RNAME, name)
         self._emit_split()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if watched is self.tree.viewport() and event.type() == QEvent.Resize:
+            self._balance()
+        return super().eventFilter(watched, event)
 
     def _emit_split(self) -> None:
         header = self.tree.header()
