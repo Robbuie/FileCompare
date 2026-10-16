@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.24.0 - Logix files open as ladder
+
+- **An L5X or L5K pair opens as ladder**, left file's rungs opposite the
+  right's, the way they are read in Logix Designer, rather than as the
+  structured text. View > Text is still one click away, and double-clicking
+  a rung still shows it there. An export with no rungs in it (tags or types
+  only) opens as text, as before.
+- **Programs and routines down the left**, as the Controller Organizer lists
+  them, each with how many of its rungs differ ("2 of 5"). Click a routine
+  to see its rungs alone; All routines shows them all again. Differing rungs
+  and All rungs work within the routine shown.
+- **Boxes are drawn with Logix Designer's labels.** A TON reads "TON  Timer
+  On Delay", then Timer, Preset and Accum with their values; MOV has Source
+  and Dest, the compares Source A and Source B, CPT Dest and Expression, and
+  so on for the common instructions. Status bits (EN, DN, ER) are down the
+  right edge of the boxes that have them. An instruction it does not know,
+  such as an AOI, is drawn with its operands unlabelled. RES, JMP and RET are
+  drawn as coils with their name in them.
+- **A changed operand is picked out, not the whole box.** A timer whose
+  preset went from 5000 to 7500 is outlined in the change colour with only
+  the Preset line highlighted. A box that became a different instruction
+  (GRT to GEQ) is highlighted whole, as before.
+- **Differences outside rungs are counted.** The bar over the rungs says
+  how many differences are elsewhere -- a tag value, a module, a data type
+  -- and that they are in the Text view, so a rung count of nothing does not
+  read as "these files are the same".
+- `tools/preview.py` takes `routine=` and `all-rungs` actions.
+
 ## 1.23.0 - typing in the panes, and copies that go straight to the queue
 
 - **Type straight into either side.** Edit > Type in the panes (Ctrl+E, or

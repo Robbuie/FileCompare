@@ -1651,6 +1651,10 @@ class CompareTab(QWidget):
         modes = self.available_modes()
         if self.mode in modes:
             return self.mode
+        if "rungs" in modes and self._has_rungs():
+            # 1.24: a Logix pair opens as ladder, the way it is read in Logix
+            # Designer. The structured text is one click away on View.
+            return "rungs"
         if "image" in modes and all(imagediff.is_image(side.path) for side in s.sides):
             return "image"
         if "table" in modes and all(side.path for side in s.sides):
@@ -1658,6 +1662,20 @@ class CompareTab(QWidget):
         if s.kind == core.BINARY and "hex" in modes:
             return "hex"
         return "text"
+
+    def _has_rungs(self) -> bool:
+        """Whether the comparison shown has any rung in it, asked once per
+        comparison: an export of tags or types alone opens as text."""
+        from app.core import ladder
+
+        s = self.session
+        if s.result is None:
+            return False
+        if getattr(self, "_has_rungs_for", None) is not s.result:
+            self._has_rungs_for = s.result
+            self._has_rungs_value = any(ladder.is_rung(line) for lines in s.result_lines
+                                        for line in lines)
+        return self._has_rungs_value
 
     def set_mode(self, mode: str) -> None:
         self.mode = mode
@@ -1754,7 +1772,9 @@ class CompareTab(QWidget):
             crumbs = s.result_crumbs
             self.rungs.set_pairs(ladder.pairs(s.result.rows, left, right,
                                               crumbs[0] if crumbs else (),
-                                              crumbs[1] if crumbs else ()))
+                                              crumbs[1] if crumbs else ()),
+                                 ladder.other_differences(s.result.rows,
+                                                          s.result.differences, left, right))
             if self.rungs.canvas.current < 0:
                 self.rungs.go_first()
 

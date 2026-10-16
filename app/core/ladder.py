@@ -39,11 +39,129 @@ from app.core.diff import align
 
 #: Drawn as contacts: a pair of upright bars, the tag above.
 CONTACTS = frozenset({"XIC", "XIO"})
-#: Drawn as coils: a pair of arcs, the tag above.
-COILS = frozenset({"OTE", "OTL", "OTU"})
+#: Drawn as coils: a pair of arcs, the tag above. RES, JMP and RET are
+#: coils in Logix Designer too, with their name between the arcs.
+COILS = frozenset({"OTE", "OTL", "OTU", "RES", "JMP", "RET"})
 #: One-shots are small boxes in Logix Designer, but a single tag: drawn as a
 #: contact with their name in it, which is how they read.
 ONE_SHOTS = frozenset({"ONS"})
+
+
+@dataclass(frozen=True)
+class Spec:
+    """How Logix Designer draws a box instruction (1.24): the title under its
+    name, a label for each operand, and the status bits it shows on its right
+    edge. Operands past the labels are shown unlabelled."""
+
+    title: str
+    labels: tuple[str, ...] = ()
+    pins: tuple[str, ...] = ()
+
+
+_TIMER = ("Timer", "Preset", "Accum")
+_COUNTER = ("Counter", "Preset", "Accum")
+_MATH = ("Source A", "Source B", "Dest")
+_ONE = ("Source", "Dest")
+_CMP = ("Source A", "Source B")
+
+#: The box instructions people meet most, as Logix Designer labels them. An
+#: instruction not listed here -- an AOI, a rarer one -- is still drawn, with
+#: its operands unlabelled.
+SPECS: dict[str, Spec] = {
+    "TON": Spec("Timer On Delay", _TIMER, ("EN", "DN")),
+    "TOF": Spec("Timer Off Delay", _TIMER, ("EN", "DN")),
+    "RTO": Spec("Retentive Timer On", _TIMER, ("EN", "DN")),
+    "CTU": Spec("Count Up", _COUNTER, ("CU", "DN")),
+    "CTD": Spec("Count Down", _COUNTER, ("CD", "DN")),
+    "MOV": Spec("Move", _ONE),
+    "MVM": Spec("Masked Move", ("Source", "Mask", "Dest")),
+    "COP": Spec("Copy File", ("Source", "Dest", "Length")),
+    "CPS": Spec("Synchronous Copy File", ("Source", "Dest", "Length")),
+    "FLL": Spec("File Fill", ("Source", "Dest", "Length")),
+    "CLR": Spec("Clear", ("Dest",)),
+    "BTD": Spec("Bit Field Distribute", ("Source", "Source Bit", "Dest", "Dest Bit", "Length")),
+    "SWPB": Spec("Swap Byte", ("Source", "Order Mode", "Dest")),
+    "ADD": Spec("Add", _MATH),
+    "SUB": Spec("Subtract", _MATH),
+    "MUL": Spec("Multiply", _MATH),
+    "DIV": Spec("Divide", _MATH),
+    "MOD": Spec("Modulo", _MATH),
+    "AND": Spec("Bitwise And", _MATH),
+    "OR": Spec("Bitwise Inclusive Or", _MATH),
+    "XOR": Spec("Bitwise Exclusive Or", _MATH),
+    "NOT": Spec("Bitwise Not", _ONE),
+    "SQR": Spec("Square Root", _ONE),
+    "ABS": Spec("Absolute Value", _ONE),
+    "NEG": Spec("Negate", _ONE),
+    "TOD": Spec("To BCD", _ONE),
+    "FRD": Spec("From BCD", _ONE),
+    "CPT": Spec("Compute", ("Dest", "Expression")),
+    "CMP": Spec("Compare", ("Expression",)),
+    "EQU": Spec("Equal", _CMP),
+    "NEQ": Spec("Not Equal", _CMP),
+    "LES": Spec("Less Than (A<B)", _CMP),
+    "LEQ": Spec("Less Than or Equal (A<=B)", _CMP),
+    "GRT": Spec("Greater Than (A>B)", _CMP),
+    "GEQ": Spec("Greater Than or Equal (A>=B)", _CMP),
+    "LIM": Spec("Limit Test", ("Low Limit", "Test", "High Limit")),
+    "MEQ": Spec("Masked Equal", ("Source", "Mask", "Compare")),
+    "OSR": Spec("One Shot Rising", ("Storage Bit", "Output Bit")),
+    "OSF": Spec("One Shot Falling", ("Storage Bit", "Output Bit")),
+    "JSR": Spec("Jump To Subroutine", ("Routine Name", "Input Par count")),
+    "SBR": Spec("Subroutine", ("Input Par",)),
+    "LBL": Spec("Label", ("Label",)),
+    "MSG": Spec("Message", ("Message Control",), ("EN", "DN", "ER")),
+    "GSV": Spec("Get System Value", ("Class Name", "Instance Name", "Attribute Name", "Dest")),
+    "SSV": Spec("Set System Value", ("Class Name", "Instance Name", "Attribute Name",
+                                     "Source")),
+    "BSL": Spec("Bit Shift Left", ("Array", "Control", "Source Bit", "Length"),
+                ("EN", "DN", "ER")),
+    "BSR": Spec("Bit Shift Right", ("Array", "Control", "Source Bit", "Length"),
+                ("EN", "DN", "ER")),
+    "FFL": Spec("FIFO Load", ("Source", "FIFO", "Control", "Length", "Position"),
+                ("EN", "DN", "EM")),
+    "FFU": Spec("FIFO Unload", ("FIFO", "Dest", "Control", "Length", "Position"),
+                ("EU", "DN", "EM")),
+    "LFL": Spec("LIFO Load", ("Source", "LIFO", "Control", "Length", "Position"),
+                ("EN", "DN", "EM")),
+    "LFU": Spec("LIFO Unload", ("LIFO", "Dest", "Control", "Length", "Position"),
+                ("EU", "DN", "EM")),
+    "SQO": Spec("Sequencer Output", ("Array", "Mask", "Dest", "Control", "Length", "Position"),
+                ("EN", "DN", "ER")),
+    "SQI": Spec("Sequencer Input", ("Array", "Mask", "Source", "Control", "Length",
+                                    "Position")),
+    "FAL": Spec("File Arith/Logical", ("Control", "Length", "Position", "Mode", "Dest",
+                                       "Expression"), ("EN", "DN", "ER")),
+    "FSC": Spec("File Search/Compare", ("Control", "Length", "Position", "Mode",
+                                        "Expression"), ("EN", "DN", "ER", "IN")),
+    "SIZE": Spec("Size In Elements", ("Source", "Dim. To Vary", "Size")),
+    "CONCAT": Spec("String Concatenate", ("Source A", "Source B", "Dest")),
+    "MID": Spec("Middle String", ("Source", "Qty", "Start", "Dest")),
+    "FIND": Spec("Find String", ("Source", "Search", "Start", "Result")),
+    "DTOS": Spec("DINT to String", _ONE),
+    "STOD": Spec("String to DINT", _ONE),
+    "RTOS": Spec("Real to String", _ONE),
+    "STOR": Spec("String to Real", _ONE),
+    "PID": Spec("Proportional Integral Derivative",
+                ("PID", "Process Variable", "Tieback", "Control Variable", "PID Master Loop",
+                 "Inhold Bit", "Inhold Value", "Setpoint", "Process Variable", "Output %"),
+                ("EN", "DN", "ER")),
+}
+
+
+def spec(name: str) -> Spec | None:
+    return SPECS.get(name.upper())
+
+
+def box_lines(instr: "Instr") -> list[tuple[str, str]]:
+    """A box's operands as Logix Designer lists them: (label, value), the
+    label empty for an operand past the ones it names."""
+    if instr.raw:
+        return []
+    known = spec(instr.name)
+    labels = known.labels if known is not None else ()
+    return [(labels[n] if n < len(labels) else "", value)
+            for n, value in enumerate(instr.operands)]
 
 
 @dataclass(frozen=True)
@@ -202,7 +320,7 @@ def instructions(node: Series | Branch) -> list[Instr]:
 # ------------------------------------------------------------------ layout
 
 #: Cells an instruction takes across. A box is two, for its name and operands.
-BOX_WIDTH = 2
+BOX_WIDTH = 2.5
 #: Lines of text a box row holds; a box with more operands is more rows.
 BOX_LINES = 3
 #: Space either side of a branch, in cells, for its rails.
@@ -234,7 +352,10 @@ class Layout:
 
 def _box_rows(instr: Instr) -> int:
     lines = 1 + len(instr.operands)
-    return max(1, -(-lines // BOX_LINES))
+    known = spec(instr.name)
+    # Status bits down the right edge want a line of space between them.
+    pins = 2 * len(known.pins) if known is not None and not instr.raw else 0
+    return max(1, -(-max(lines, pins) // BOX_LINES))
 
 
 def _measure(item) -> tuple[float, int]:
@@ -331,6 +452,32 @@ def mark(left: Series | None, right: Series | None) -> tuple[list[int], list[int
     return marks_a, marks_b
 
 
+def counterparts(left: Series | None, right: Series | None) -> tuple[dict[int, Instr],
+                                                                     dict[int, Instr]]:
+    """For each instruction `mark` calls CHANGED, the one opposite it, so a
+    box whose preset changed can colour the preset and not the whole box."""
+    a = instructions(left) if left is not None else []
+    b = instructions(right) if right is not None else []
+    out_a: dict[int, Instr] = {}
+    out_b: dict[int, Instr] = {}
+    matcher = SequenceMatcher(None, [i.key for i in a], [i.key for i in b], autojunk=False)
+    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+        if op == "replace":
+            for k in range(min(i2 - i1, j2 - j1)):
+                out_a[i1 + k] = b[j1 + k]
+                out_b[j1 + k] = a[i1 + k]
+    return out_a, out_b
+
+
+def changed_operands(instr: Instr, other: Instr | None) -> set[int]:
+    """Which operands of `instr` differ from `other`'s, when both are the
+    same instruction; None of them can be singled out otherwise."""
+    if other is None or instr.raw or other.raw or instr.name != other.name \
+            or len(instr.operands) != len(other.operands):
+        return set()
+    return {n for n, (x, y) in enumerate(zip(instr.operands, other.operands)) if x != y}
+
+
 # ------------------------------------------------------------------ the rungs
 
 @dataclass
@@ -368,6 +515,31 @@ class RungPair:
     differs: bool
     #: The first comparison row of this pair, to go to it in the text view.
     row: int = 0
+
+
+def routine_of(pair: RungPair) -> str:
+    """The program and routine a pair is in, "Program Main / MainRoutine":
+    the left side's, or the right's when the rung is only on the right."""
+    rung = pair.left if pair.left is not None else pair.right
+    return rung.where if rung is not None else ""
+
+
+def other_differences(rows: Sequence[align.Row], blocks: Sequence[align.Block],
+                      left: Sequence[str], right: Sequence[str]) -> int:
+    """How many of a comparison's differences have no rung in them -- a tag,
+    a module, a data type -- which the rung view does not draw and must say
+    so rather than look like the whole answer."""
+    count = 0
+    for block in blocks:
+        rungs = False
+        for li, ri, _kind in rows[block.start:block.end]:
+            for lines, index in ((left, li), (right, ri)):
+                if 0 <= index < len(lines) and (is_rung(lines[index])
+                                                or _is_comment(lines[index])):
+                    rungs = True
+        if not rungs:
+            count += 1
+    return count
 
 
 def is_rung(line: str) -> bool:

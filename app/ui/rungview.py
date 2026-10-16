@@ -18,6 +18,13 @@ By default only the rungs that differ are listed, each under its program,
 routine and rung number. "All rungs" lists the unchanged ones too, greyed.
 Double-click a rung, or press Enter, to see it in the text view.
 
+1.24: down the left, the programs and routines, as Logix Designer's
+Controller Organizer lists them, each with how many of its rungs differ. A
+click shows that routine's rungs alone; "All routines" shows them all again.
+Boxes are drawn with Logix Designer's labels (Timer, Preset, Accum) and
+status bits (EN, DN), and a comparison whose differences are not all in
+rungs -- a tag value, a module -- says how many it has elsewhere.
+
 Painted, not built from widgets: a routine can have thousands of rungs, and
 only the ones on screen are drawn. Layouts are cached per width.
 """
@@ -33,6 +40,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSplitter,
+    QStyle,
+    QStyledItemDelegate,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -53,6 +65,8 @@ class _Shown:
     pair: L.RungPair
     trees: tuple[L.Series | None, L.Series | None]
     marks: tuple[list[int], list[int]]
+    #: Per side, the instruction opposite each changed one (1.24).
+    opposite: tuple[dict, dict] = ({}, {})
     layouts: tuple[L.Layout | None, L.Layout | None] = (None, None)
     cells: int = 0
     top: float = 0.0
@@ -312,7 +326,7 @@ class RungCanvas(QAbstractScrollArea):
             if pair.differs and (pair.left is None or pair.right is None):
                 whole = "diff_del" if side == 0 else "diff_add"
             self._paint_rung(painter, lay, item.marks[side], x, y, half - 2 * MARGIN,
-                             side, whole, pair.differs, colour)
+                             side, whole, pair.differs, colour, item.opposite[side])
         if current:
             pen = QPen(colour("accent_line"))
             pen.setWidthF(1.5)
@@ -322,7 +336,7 @@ class RungCanvas(QAbstractScrollArea):
 
     def _paint_rung(self, painter: QPainter, lay: L.Layout, marks: list[int], x0: float,
                     y0: float, width: float, side: int, whole: str | None, differs: bool,
-                    colour) -> None:
+                    colour, opposite: dict | None = None) -> None:
         cw, rh = self.cell_w, self.row_h
         wire_dy = self.wire_dy
         inner = x0 + 12                      # where the cells start, past the rail
@@ -371,11 +385,18 @@ class RungCanvas(QAbstractScrollArea):
             elif state == L.ONLY:
                 tone = "diff_del" if side == 0 else "diff_add"
             cell = QRectF(cx(placed.x), y0 + placed.y * rh, placed.w * cw, placed.h * rh)
-            self._paint_instr(painter, placed.instr, cell, wy(placed.y), tone, differs, colour)
+            operands: set[int] = set()
+            if tone == "diff_chg" and placed.instr.shape == "box" and opposite:
+                operands = L.changed_operands(placed.instr, opposite.get(placed.index))
+            self._paint_instr(painter, placed.instr, cell, wy(placed.y), tone, differs, colour,
+                              operands)
 
     def _paint_instr(self, painter: QPainter, instr: L.Instr, cell: QRectF, wire_y: float,
-                     tone: str | None, differs: bool, colour) -> None:
-        if tone is not None:
+                     tone: str | None, differs: bool, colour,
+                     operands: set[int] | frozenset = frozenset()) -> None:
+        # A box that is the same instruction with some operands changed is
+        # outlined in the change colour, and only those operands are filled.
+        if tone is not None and not operands:
             painter.fillRect(cell.adjusted(2, 3, -2, -3), colour(tone + "_row"))
         ink = colour(tone + "_bar") if tone is not None else colour(
             "txt_0" if differs else "txt_2")
@@ -408,6 +429,15 @@ class RungCanvas(QAbstractScrollArea):
                                      int(Qt.AlignHCenter | Qt.AlignTop), instr.name)
                     painter.setFont(self.owner.mono)
             else:
+                letter = {"OTL": "L", "OTU": "U"}.get(instr.name, "")
+                if instr.name in ("RES", "JMP", "RET"):
+                    # Named coils are wider, as Logix Designer draws (RES).
+                    letter = instr.name
+                    half = 17.0
+                    painter.setPen(wire)
+                    painter.drawLine(QPointF(cell.left(), wire_y), QPointF(mid - half, wire_y))
+                    painter.drawLine(QPointF(mid + half, wire_y), QPointF(cell.right(), wire_y))
+                    painter.setPen(pen)
                 path = QPainterPath()
                 path.arcMoveTo(QRectF(mid - half - 4, wire_y - tall, 10, 2 * tall), 120)
                 path.arcTo(QRectF(mid - half - 4, wire_y - tall, 10, 2 * tall), 120, 120)
@@ -415,13 +445,13 @@ class RungCanvas(QAbstractScrollArea):
                 path.arcTo(QRectF(mid + half - 6, wire_y - tall, 10, 2 * tall), 60, -120)
                 painter.setBrush(Qt.NoBrush)
                 painter.drawPath(path)
-                letter = {"OTL": "L", "OTU": "U"}.get(instr.name, "")
                 if letter:
                     painter.setFont(self.owner.mono_small)
                     painter.drawText(QRectF(mid - half, wire_y - tall, 2 * half, 2 * tall),
                                      int(Qt.AlignCenter), letter)
                     painter.setFont(self.owner.mono)
-            tag = instr.operands[0] if instr.operands else instr.name
+            tag = instr.operands[0] if instr.operands else (
+                "" if instr.name in ("RET",) else instr.name)
             room = cell.width() - 6
             lines = _two_lines(tag, fm, room)
             for n, text in enumerate(lines):
@@ -430,25 +460,90 @@ class RungCanvas(QAbstractScrollArea):
                                         fm.height()),
                                  int(Qt.AlignHCenter | Qt.AlignBottom), text)
             return
-        # A box: the name on top, one operand a line below it.
-        box = QRectF(cell.left() + 8, cell.top() + 6, cell.width() - 16, cell.height() - 12)
+        # A box as Logix Designer draws one (1.24): its name and what it is
+        # on the top line, each operand under it with the operand's label on
+        # the left and its tag or value on the right, and the status bits
+        # (EN, DN, ER) down the right edge.
+        known = L.spec(instr.name) if not instr.raw else None
+        pins = known.pins if known is not None else ()
+        lh = fm.height()
+        small = QFontMetricsF(self.owner.mono_small)
+        step = max(lh, small.height() * 1.6)
+        # As tall as what it holds -- its lines, or its status bits under
+        # the wire -- and never taller than its cell.
+        lines = 1 if instr.raw else 1 + len(instr.operands)
+        need = max(lines * lh + 8, (wire_y - cell.top() - 6) + max(0, len(pins) - 1) * step
+                   + small.height() / 2 + 8, wire_y - cell.top() - 6 + lh)
+        box = QRectF(cell.left() + 8, cell.top() + 6, cell.width() - 16,
+                     min(cell.height() - 12, need))
         painter.setPen(wire)
         painter.drawLine(QPointF(cell.left(), wire_y), QPointF(box.left(), wire_y))
         painter.drawLine(QPointF(box.right(), wire_y), QPointF(cell.right(), wire_y))
         painter.setPen(pen)
-        painter.setBrush(colour("bg_2") if tone is None else Qt.NoBrush)
+        painter.setBrush(colour("bg_2") if tone is None or operands else Qt.NoBrush)
         painter.drawRect(box)
         painter.setBrush(Qt.NoBrush)
-        lines = [instr.raw] if instr.raw else [instr.name] + list(instr.operands)
-        lh = fm.height()
-        for n, text in enumerate(lines):
-            y = box.top() + 3 + n * lh
+        if operands:
+            # Outlined in the change colour; its text plain but for the
+            # operands that changed.
+            changed_pen = pen
+            pen = QPen(colour("txt_0"))
+            painter.setPen(pen)
+            tone_text = None
+        else:
+            changed_pen = pen
+            tone_text = tone
+        pin_w = small.horizontalAdvance("MM") + 10 if pins else 0
+        text_w = box.width() - 12 - pin_w
+        if instr.raw:
+            painter.drawText(QRectF(box.left() + 6, box.top() + 3, text_w, lh),
+                             int(Qt.AlignLeft | Qt.AlignVCenter),
+                             fm.elidedText(instr.raw, Qt.ElideRight, text_w))
+            painter.setFont(self.owner.mono)
+            return
+        painter.setFont(self.owner.mono_bold)
+        head = QRectF(box.left() + 6, box.top() + 3, text_w, lh)
+        painter.drawText(head, int(Qt.AlignLeft | Qt.AlignVCenter), instr.name)
+        used = QFontMetricsF(self.owner.mono_bold).horizontalAdvance(instr.name) + 10
+        if known is not None and used < text_w:
+            painter.setFont(self.owner.ui)
+            painter.setPen(QPen(colour("txt_2") if tone_text is None else ink))
+            painter.drawText(head.adjusted(used, 0, 0, 0), int(Qt.AlignLeft | Qt.AlignVCenter),
+                             self.ui.elidedText(known.title, Qt.ElideRight, text_w - used))
+            painter.setPen(pen)
+        painter.setFont(self.owner.mono)
+        for n, (label, value) in enumerate(L.box_lines(instr)):
+            y = box.top() + 3 + (n + 1) * lh
             if y + lh > box.bottom() + 1:
                 break
-            painter.setFont(self.owner.mono_bold if n == 0 and not instr.raw else self.owner.mono)
-            painter.drawText(QRectF(box.left() + 6, y, box.width() - 12, lh),
-                             int(Qt.AlignLeft | Qt.AlignVCenter),
-                             fm.elidedText(text, Qt.ElideRight, box.width() - 12))
+            row = QRectF(box.left() + 6, y, text_w, lh)
+            if n in operands:
+                painter.fillRect(row.adjusted(-4, 0, 4, 0), colour(tone + "_row"))
+            if label:
+                painter.setFont(self.owner.ui)
+                painter.setPen(QPen(colour("txt_2") if tone_text is None else ink))
+                painter.drawText(row, int(Qt.AlignLeft | Qt.AlignVCenter), label)
+                room = text_w - self.ui.horizontalAdvance(label) - 10
+                painter.setFont(self.owner.mono)
+                painter.setPen(changed_pen if n in operands else pen)
+                painter.drawText(row, int(Qt.AlignRight | Qt.AlignVCenter),
+                                 fm.elidedText(value, Qt.ElideLeft, max(0.0, room)))
+            else:
+                painter.setPen(changed_pen if n in operands else pen)
+                painter.drawText(row, int(Qt.AlignLeft | Qt.AlignVCenter),
+                                 fm.elidedText(value, Qt.ElideRight, text_w))
+        if pins:
+            # The first bit sits on the rung's wire, the others under it.
+            painter.setFont(self.owner.mono_small)
+            painter.setPen(QPen(colour("txt_2") if tone_text is None else ink))
+            for n, pin in enumerate(pins):
+                y = wire_y + n * step
+                if y + small.height() / 2 > box.bottom():
+                    break
+                painter.drawText(QRectF(box.right() - pin_w, y - small.height() / 2,
+                                        pin_w - 4, small.height()),
+                                 int(Qt.AlignRight | Qt.AlignVCenter), pin)
+            painter.setPen(pen)
         painter.setFont(self.owner.mono)
 
     def viewportEvent(self, event) -> bool:  # noqa: N802
@@ -479,6 +574,155 @@ def _two_lines(tag: str, fm: QFontMetricsF, room: float) -> list[str]:
     return [tag[:best], fm.elidedText(tag[best:], Qt.ElideMiddle, room)]
 
 
+ALL = ""                        # the routine list's "All routines"
+_ENTRY = Qt.UserRole + 1
+
+
+class _RoutineDelegate(QStyledItemDelegate):
+    """A program as a small heading; a routine as its name with its count of
+    differing rungs, a dot in the difference colour when there are some."""
+
+    def __init__(self, owner: "RoutineList") -> None:
+        super().__init__(owner)
+        self.owner = owner
+
+    def sizeHint(self, option, index):  # noqa: N802
+        size = super().sizeHint(option, index)
+        line = QFontMetricsF(option.font).height()
+        heading = index.data(_ENTRY) is None
+        size.setHeight(int(line + (14 if heading else 12)))
+        return size
+
+    def paint(self, painter: QPainter, option, index) -> None:
+        tokens = self.owner.tokens
+        colour = lambda name: parse_colour(tokens.get(name))  # noqa: E731
+        entry = index.data(_ENTRY)
+        text = index.data(Qt.DisplayRole) or ""
+        rect = QRectF(option.rect)
+        painter.save()
+        base = QFont(option.font)
+        if entry is None:
+            small = QFont(base)
+            small.setBold(True)
+            small.setPixelSize(max(9, (base.pixelSize() if base.pixelSize() > 0 else 13) - 2))
+            painter.setFont(small)
+            painter.setPen(colour("txt_2"))
+            inner = rect.adjusted(10, 4, -10, 0)
+            painter.drawText(inner, int(Qt.AlignLeft | Qt.AlignVCenter),
+                             QFontMetricsF(small).elidedText(text.upper(), Qt.ElideRight,
+                                                             inner.width()))
+            painter.restore()
+            return
+        key, differing, total = entry
+        if option.state & QStyle.State_Selected:
+            painter.fillRect(rect, colour("accent_row"))
+            painter.fillRect(QRectF(rect.left(), rect.top(), 3, rect.height()), colour("accent"))
+        elif option.state & QStyle.State_MouseOver:
+            painter.fillRect(rect, colour("bg_3"))
+        indent = 12 if key == ALL else 22
+        if differing:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(colour("diff_chg_bar"))
+            painter.drawEllipse(QRectF(rect.left() + indent - 10, rect.center().y() - 3, 6, 6))
+        bold = QFont(base)
+        bold.setBold(key == ALL)
+        count = f"{differing:,} of {total:,}" if total else ""
+        fm = QFontMetricsF(base)
+        room = rect.width() - indent - fm.horizontalAdvance(count) - 22
+        painter.setFont(bold)
+        painter.setPen(colour("txt_0" if differing or key == ALL else "txt_2"))
+        painter.drawText(rect.adjusted(indent, 0, 0, 0), int(Qt.AlignLeft | Qt.AlignVCenter),
+                         QFontMetricsF(bold).elidedText(text, Qt.ElideRight, max(0.0, room)))
+        painter.setFont(base)
+        painter.setPen(colour("txt_1" if differing else "txt_2"))
+        painter.drawText(rect.adjusted(0, 0, -10, 0), int(Qt.AlignRight | Qt.AlignVCenter),
+                         count)
+        painter.restore()
+
+
+class RoutineList(QWidget):
+    """The programs and routines of a Logix comparison (1.24), Controller
+    Organizer style. Emits `chosen(key)`: a routine's "Program X / Routine"
+    or ALL."""
+
+    chosen = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setProperty("role", "sidebar")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.tokens: dict[str, str] = {}
+        self.tree = QTreeWidget()
+        self.tree.setProperty("role", "difflist")
+        self.tree.setHeaderHidden(True)
+        self.tree.setRootIsDecorated(False)
+        self.tree.setIndentation(0)
+        self.tree.setMouseTracking(True)
+        self.tree.setFocusPolicy(Qt.NoFocus)
+        self.tree.setItemDelegate(_RoutineDelegate(self))
+        self.tree.itemClicked.connect(self._clicked)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(6, 6, 0, 6)
+        box.setSpacing(0)
+        box.addWidget(self.tree, 1)
+        self.setMinimumWidth(180)
+        self._items: dict[str, QTreeWidgetItem] = {}
+
+    def apply_tokens(self, tokens: dict[str, str]) -> None:
+        self.tokens = tokens
+        self.tree.viewport().update()
+
+    def set_pairs(self, pairs: list[L.RungPair], current: str) -> None:
+        counts: dict[str, list[int]] = {}
+        for pair in pairs:
+            key = L.routine_of(pair)
+            entry = counts.setdefault(key, [0, 0])
+            entry[1] += 1
+            if pair.differs:
+                entry[0] += 1
+        self.tree.clear()
+        self._items = {}
+        everything = QTreeWidgetItem(["All routines"])
+        everything.setData(0, _ENTRY, (ALL, sum(c[0] for c in counts.values()),
+                                       sum(c[1] for c in counts.values())))
+        self.tree.addTopLevelItem(everything)
+        self._items[ALL] = everything
+        # Grouped by program (or AOI), in the order the comparison has them,
+        # which is by name: the order the comparers sort them in.
+        heading = None
+        for key, (differing, total) in counts.items():
+            group, _sep, routine = key.partition(" / ")
+            if not routine:
+                group, routine = "", key or "(no routine)"
+            if group != heading:
+                heading = group
+                if group:
+                    head = QTreeWidgetItem([group])
+                    head.setFlags(Qt.ItemIsEnabled)
+                    self.tree.addTopLevelItem(head)
+            item = QTreeWidgetItem([routine])
+            item.setData(0, _ENTRY, (key, differing, total))
+            item.setToolTip(0, f"{key}\n{differing:,} of {total:,} rungs differ")
+            self.tree.addTopLevelItem(item)
+            self._items[key] = item
+        self.set_current(current)
+
+    def set_current(self, key: str) -> None:
+        self.tree.blockSignals(True)
+        self.tree.clearSelection()
+        item = self._items.get(key) or self._items.get(ALL)
+        if item is not None:
+            item.setSelected(True)
+            self.tree.scrollToItem(item)
+        self.tree.blockSignals(False)
+
+    def _clicked(self, item: QTreeWidgetItem, _column: int) -> None:
+        entry = item.data(0, _ENTRY)
+        if entry is not None:
+            self.chosen.emit(entry[0])
+
+
 class RungView(QWidget):
     """The bar (differing only or all rungs, and the count) over the canvas."""
 
@@ -493,6 +737,12 @@ class RungView(QWidget):
         self._fonts()
         self.pairs: list[L.RungPair] = []
         self.all = False
+        #: The routine shown alone, or ALL (1.24).
+        self.routine = ALL
+        #: Differences the comparison has outside rungs (1.24).
+        self.others = 0
+        self.routines = RoutineList()
+        self.routines.chosen.connect(self.set_routine)
         self.canvas = RungCanvas(self)
         self.canvas.currentChanged.connect(self.currentChanged)
         self.canvas.openRow.connect(self.openRow)
@@ -522,11 +772,24 @@ class RungView(QWidget):
         top.setProperty("role", "folderbar")
         top.setAttribute(Qt.WA_StyledBackground, True)
         top.setLayout(bar)
+        right = QWidget()
+        column = QVBoxLayout(right)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        column.addWidget(top)
+        column.addWidget(self.canvas, 1)
+        self.split = QSplitter(Qt.Horizontal)
+        self.split.setChildrenCollapsible(False)
+        self.split.setHandleWidth(1)
+        self.split.addWidget(self.routines)
+        self.split.addWidget(right)
+        self.split.setStretchFactor(0, 0)
+        self.split.setStretchFactor(1, 1)
+        self.split.setSizes([230, 1000])
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(0)
-        box.addWidget(top)
-        box.addWidget(self.canvas, 1)
+        box.addWidget(self.split, 1)
         self._buttons()
 
     def _fonts(self) -> None:
@@ -548,16 +811,32 @@ class RungView(QWidget):
         self.tokens = tokens
         self.mono = mono_font(tokens)
         self._fonts()
+        self.routines.apply_tokens(tokens)
         self.canvas.relayout()
 
-    def set_pairs(self, pairs: list[L.RungPair]) -> None:
+    def set_pairs(self, pairs: list[L.RungPair], others: int = 0) -> None:
         """A new comparison. Where the reader was is kept by rung, if it is
-        still listed."""
+        still listed, and the routine shown alone stays shown if it is still
+        there. `others` is how many differences are not in rungs."""
         before = None
         if 0 <= self.canvas.current < len(self.canvas.shown):
             before = self.canvas.shown[self.canvas.current].pair
         self.pairs = pairs
+        self.others = others
+        if self.routine != ALL and not any(L.routine_of(p) == self.routine for p in pairs):
+            self.routine = ALL
+        self.routines.set_pairs(pairs, self.routine)
         self._show(keep=before)
+
+    def set_routine(self, key: str) -> None:
+        """One routine's rungs alone, or ALL of them."""
+        self.routine = key
+        self.routines.set_current(key)
+        self._show()
+        if self.canvas.current < 0:
+            self.go_first()
+            if self.canvas.current < 0 and self.canvas.shown:
+                self.canvas.go(0)
 
     def set_all(self, on: bool) -> None:
         self.all = on
@@ -568,12 +847,13 @@ class RungView(QWidget):
         self._show(keep=before)
 
     def _show(self, keep: L.RungPair | None = None) -> None:
-        listed = [p for p in self.pairs if self.all or p.differs]
+        listed = [p for p in self.pairs if (self.all or p.differs)
+                  and (self.routine == ALL or L.routine_of(p) == self.routine)]
         shown = []
         for pair in listed:
             trees = tuple(L.parse(r.text) if r is not None else None
                           for r in (pair.left, pair.right))
-            shown.append(_Shown(pair, trees, L.mark(*trees)))
+            shown.append(_Shown(pair, trees, L.mark(*trees), L.counterparts(*trees)))
         self.canvas.shown = shown
         self.canvas.current = -1
         if keep is not None:
@@ -581,21 +861,32 @@ class RungView(QWidget):
                 if item.pair.row == keep.row:
                     self.canvas.current = index
                     break
-        differing = sum(1 for p in self.pairs if p.differs)
-        total = len(self.pairs)
-        if not total:
-            self.note.setText("")
-        else:
-            self.note.setText(f"{differing:,} of {total:,} rungs differ"
-                              + ("" if self.all else
-                                 "  ·  double-click a rung for its text"))
+        scope = [p for p in self.pairs
+                 if self.routine == ALL or L.routine_of(p) == self.routine]
+        differing = sum(1 for p in scope if p.differs)
+        total = len(scope)
+        parts = []
+        if total:
+            parts.append(f"{differing:,} of {total:,} rungs differ")
+        if self.others:
+            # The rung view draws rungs only; a changed tag value or module
+            # is in the text view, and this says so rather than leave the
+            # count of rungs looking like the whole answer.
+            parts.append(f"{self.others:,} other difference{'s' if self.others != 1 else ''}"
+                         " (tags, modules, types) in Text view")
+        if total and not self.all:
+            parts.append("double-click a rung for its text")
+        self.note.setText("  ·  ".join(parts))
         self.canvas.relayout()
         self.currentChanged.emit()
 
     def empty_text(self) -> str:
         if not self.pairs:
             return "No rungs in these files"
-        return "No rung differs. All rungs lists them."
+        where = "in this routine" if self.routine != ALL else ""
+        tail = (f"  {self.others:,} other difference{'s' if self.others != 1 else ''}"
+                " in Text view." if self.others else "")
+        return f"No rung differs {where}".rstrip() + ". All rungs lists them." + tail
 
     # The tab's navigation buttons and its count line.
 

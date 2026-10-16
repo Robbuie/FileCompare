@@ -75,6 +75,8 @@ def act(app, page, actions) -> None:
       next            press next difference
       expand          open every folder of a folder compare
       mode=VIEW       switch the View to text, rungs, table, hex or image
+      routine=KEY     the rung view: show one routine ("Program Main / MainRoutine")
+      all-rungs       the rung view: list the unchanged rungs too
       menu=TITLE      open that menu of the menu bar; it is saved beside the
                       picture as `<out>-menu.png` (1.17)
       run=COMMAND     run a command from `ui/commands.py`, as a click would
@@ -93,6 +95,10 @@ def act(app, page, actions) -> None:
             page.folders.tree.expandAll()
         elif name == "mode":
             page.set_mode(value)
+        elif name == "routine":
+            page.rungs.set_routine(value)
+        elif name == "all-rungs":
+            page.rungs.set_all(True)
         elif name == "menu":
             from app.ui.chrome import sync_menu
 

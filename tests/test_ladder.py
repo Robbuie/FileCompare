@@ -114,7 +114,8 @@ def test_the_tab_draws_a_logix_pair_as_rungs(qt_app, tmp_path):
             QCoreApplication.processEvents()
             time.sleep(0.01)
         assert "rungs" in tab.available_modes()
-        tab.set_mode("rungs")
+        # 1.24: a Logix pair opens as ladder without being asked.
+        assert tab.shown_mode() == "rungs"
         QCoreApplication.processEvents()
         assert tab.stack.currentWidget() is tab.rungs
         current, total = tab.rungs.position()
@@ -125,6 +126,12 @@ def test_the_tab_draws_a_logix_pair_as_rungs(qt_app, tmp_path):
         tab.rungs.set_all(True)
         assert len(tab.rungs.canvas.shown) > total
         tab.rungs.canvas.viewport().grab()          # paints without raising
+        # The routine list: one routine alone, then all of them again.
+        key = L.routine_of(tab.rungs.canvas.shown[0].pair)
+        tab.rungs.set_routine(key)
+        assert all(L.routine_of(item.pair) == key for item in tab.rungs.canvas.shown)
+        tab.rungs.set_routine("")
+        assert len(tab.rungs.canvas.shown) > total
         row = tab.rungs.current_pair().row
         tab._rung_to_text(row)
         assert tab.stack.currentWidget() is tab.view
@@ -136,3 +143,43 @@ def test_the_tab_draws_a_logix_pair_as_rungs(qt_app, tmp_path):
     finally:
         window._may_close = lambda pages: True
         window.close()
+
+
+def test_boxes_are_labelled_as_logix_designer_labels_them():
+    ton = L.instructions(L.parse("TON(RunTimer,5000,0)"))[0]
+    assert L.box_lines(ton) == [("Timer", "RunTimer"), ("Preset", "5000"), ("Accum", "0")]
+    assert L.spec("ton").pins == ("EN", "DN")
+    # An instruction it does not know (an AOI) is drawn, unlabelled.
+    aoi = L.instructions(L.parse("Motor_AOI(M1,Start,Stop)"))[0]
+    assert aoi.shape == "box" and L.box_lines(aoi) == [("", "M1"), ("", "Start"), ("", "Stop")]
+    # Past its labels, an operand is unlabelled rather than dropped.
+    jsr = L.instructions(L.parse("JSR(Sub,1,In1)"))[0]
+    assert L.box_lines(jsr)[-1] == ("", "In1")
+    assert L.instructions(L.parse("RES(T)"))[0].shape == "coil"
+    # A box with status bits takes the rows they need.
+    msg = L.layout(L.parse("MSG(M)")).placed[0]
+    assert msg.h >= 2
+
+
+def test_a_changed_box_names_the_operand_that_changed():
+    left = L.parse("XIC(A)TON(T,5000,0)")
+    right = L.parse("XIC(A)TON(T,7500,0)")
+    assert L.mark(left, right) == ([L.SAME, L.CHANGED], [L.SAME, L.CHANGED])
+    opposite_left, opposite_right = L.counterparts(left, right)
+    ton = L.instructions(left)[1]
+    assert L.changed_operands(ton, opposite_left[1]) == {1}
+    assert L.changed_operands(L.instructions(right)[1], opposite_right[1]) == {1}
+    # A different instruction, or a different count: nothing singled out.
+    assert L.changed_operands(L.instructions(L.parse("GRT(A,B)"))[0],
+                              L.instructions(L.parse("GEQ(A,B)"))[0]) == set()
+
+
+def test_differences_outside_rungs_are_counted_for_the_rung_view():
+    left = ["Tag Speed : REAL = 1.5", "Routine R (RLL)", "  Rung: XIC(A)OTE(B);"]
+    right = ["Tag Speed : REAL = 2.25", "Routine R (RLL)", "  Rung: XIC(A)OTE(C);"]
+    result = align.compare(left, right, Rules())
+    assert len(result.differences) == 2
+    assert L.other_differences(result.rows, result.differences, left, right) == 1
+    crumbs = ["Tags", "Program P / R", "Program P / R / Rung 0"]
+    pairs = L.pairs(result.rows, left, right, crumbs, crumbs)
+    assert L.routine_of(pairs[0]) == "Program P / R"
