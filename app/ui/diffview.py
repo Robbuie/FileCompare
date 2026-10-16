@@ -521,7 +521,7 @@ class TextPane(_Painted):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         s = self.state
-        if (s.typing and s.layout == "sbs" and event.button() == Qt.LeftButton
+        if (s.typing and s.layout in ("sbs", "fluid") and event.button() == Qt.LeftButton
                 and not event.modifiers() & Qt.ShiftModifier
                 and event.position().x() > self.number_width()
                 and s.fold_of(self.line_at(event.position().y())) is None and s.rows):
@@ -532,19 +532,30 @@ class TextPane(_Painted):
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
-        if self.state.typing and self.state.layout == "sbs":
+        if self.state.typing and self.state.layout in ("sbs", "fluid"):
             return                  # a second click on the caret, not the line editor
         super().mouseDoubleClickEvent(event)
 
     def _paint_caret(self, painter: QPainter, text_x: float) -> None:
         s = self.state
         at = s.caret_at
-        if not s.typing or at is None or at[0] != self.side or not s.rows:
+        if not s.typing or at is None or at[0] != self.side or not s.rows \
+                or s.layout not in ("sbs", "fluid"):
             return
         row, column = at[1], at[2]
-        if not 0 <= row < len(s.rows) or s.hidden(row):
+        if not 0 <= row < len(s.rows):
             return
-        y = (s.display_of(row) - s.first) * self.row_h
+        if s.layout == "fluid":
+            # This side's lines, one after another: the caret's line is the
+            # row's line here, or for a filler row the place it would go.
+            index = s.rows[row][self.side]
+            before = s.before[self.side]
+            line = index if index != align.NONE else (before[row] if len(before) > row else 0)
+            y = (line - self.top_line()) * self.row_h
+        else:
+            if s.hidden(row):
+                return
+            y = (s.display_of(row) - s.first) * self.row_h
         if y < -self.row_h or y > self.height():
             return
         x = text_x + column * self.char_w - s.x
@@ -606,6 +617,7 @@ class TextPane(_Painted):
         painter.fillRect(QRectF(0, 0, numbers, self.height()), self.colour("bg_1"))
         if s.layout == "fluid":
             self._paint_fluid(painter, numbers, text_x)
+            self._paint_caret(painter, text_x)
             painter.end()
             return
 
@@ -732,6 +744,9 @@ class TextPane(_Painted):
                                      Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip, text)
                 else:
                     self._paint_coloured(painter, text, spans, first_col, text_x - offset, y)
+                if kind == align.CHANGED:
+                    self._mark_ink(painter, text, s.spans(row)[side], first_col, cols,
+                                   text_x - offset, y)
                 painter.setClipping(False)
 
         if s.rows and end <= s.first + self.visible_rows():
@@ -742,6 +757,23 @@ class TextPane(_Painted):
         painter.setPen(QPen(self.colour("line_soft"), 1))
         painter.drawLine(int(numbers), 0, int(numbers), self.height())
         painter.end()
+
+    def _mark_ink(self, painter: QPainter, text: str, spans, first_col: int, cols: int,
+                  x: float, y: float) -> None:
+        """1.25, the modern palette: the characters that differ drawn again in
+        the pane's own dark, on their near-solid mark, so a changed letter is
+        the first thing seen. Other palettes keep the text as it was."""
+        ink = self.tokens.get("diff_mark_ink")
+        if not ink or not spans:
+            return
+        painter.setPen(parse_colour(ink))
+        for start, stop in spans:
+            a, b = max(start, first_col), min(stop, first_col + cols)
+            if a < b:
+                painter.drawText(QRectF(x + (a - first_col) * self.char_w, y,
+                                        (b - a + 1) * self.char_w, self.row_h),
+                                 Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip,
+                                 text[a - first_col:b - first_col])
 
     def _paint_coloured(self, painter: QPainter, text: str, spans, first_col: int,
                         x: float, y: float) -> None:
@@ -835,6 +867,9 @@ class TextPane(_Painted):
                     painter.setPen(ink)
                     painter.drawText(QRectF(text_x - offset, y, self.width(), self.row_h),
                                      Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip, text)
+                if kind == align.CHANGED:
+                    self._mark_ink(painter, text, s.spans(row)[side], first_col, cols,
+                                   text_x - offset, y)
                 painter.setClipping(False)
         # Where the other side has lines and this one none: a rule.
         for block in s.blocks:
@@ -1133,7 +1168,7 @@ class DiffMap(QWidget):
     one: two controls that both mean "where am I" is one too many.
     """
 
-    WIDTH = 18
+    WIDTH = 28
     moved = Signal(float)       # the fraction of the rows to centre on
     wheeled = Signal(int)
 
@@ -1154,20 +1189,34 @@ class DiffMap(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802
         s = self.state
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
         painter.fillRect(self.rect(), parse_colour(self.tokens.get("bg_1")))
+        painter.setPen(QPen(parse_colour(self.tokens.get("line_soft")), 1))
+        painter.drawLine(0, 0, 0, self.height())
         total = max(1, len(s.rows))
         height = self.height() - 4
-        column = (self.width() - 6) / 2
+        # 1.25: two lanes with a gap, left side's changes and right side's,
+        # so a block on one side only sits visibly on that side.
+        column = (self.width() - 12) / 2
+        current = s.blocks[s.current] if s.current is not None and \
+            s.current < len(s.blocks) else None
         for block in s.blocks:
             y0 = 2 + block.start / total * height
             y1 = 2 + block.end / total * height
-            box_h = max(2.0, y1 - y0)
+            box_h = max(3.0, y1 - y0)
             colour = parse_colour(self.tokens.get(_block_bar(block)))
             left, right = self._sides(block)
-            if left:
-                painter.fillRect(QRectF(2, y0, column, box_h), colour)
-            if right:
-                painter.fillRect(QRectF(4 + column, y0, column, box_h), colour)
+            lanes = ([QRectF(4, y0, column, box_h)] if left else []) + \
+                ([QRectF(8 + column, y0, column, box_h)] if right else [])
+            for lane in lanes:
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(colour)
+                painter.drawRoundedRect(lane, 1.5, 1.5)
+                if block is current:
+                    painter.setBrush(Qt.NoBrush)
+                    painter.setPen(QPen(parse_colour(self.tokens.get("txt_0")), 1.5))
+                    painter.drawRoundedRect(lane.adjusted(-1.5, -1.5, 1.5, 1.5), 2.5, 2.5)
+        painter.setBrush(Qt.NoBrush)
         # The view.
         if s.rows:
             # The view, in rows: with lines folded (1.18) a screenful can
@@ -1180,13 +1229,16 @@ class DiffMap(QWidget):
                 bottom_row = fold[1]
             v0 = 2 + top_row / total * height
             v1 = 2 + min(total, bottom_row) / total * height
-            frame = parse_colour(self.tokens.get("txt_1"))
+            frame = parse_colour(self.tokens.get("accent"))
             fill = QColor(frame)
-            fill.setAlphaF(0.12)
-            painter.fillRect(QRectF(1, v0, self.width() - 2, max(4.0, v1 - v0)), fill)
-            pen = QPen(frame, 1)
-            painter.setPen(pen)
-            painter.drawRect(QRectF(1, v0, self.width() - 3, max(4.0, v1 - v0)))
+            fill.setAlphaF(0.08)
+            edge = QColor(frame)
+            edge.setAlphaF(0.55)
+            box = QRectF(2, v0, self.width() - 4, max(6.0, v1 - v0))
+            painter.setPen(QPen(edge, 1))
+            painter.setBrush(fill)
+            painter.drawRoundedRect(box, 3, 3)
+            painter.setBrush(Qt.NoBrush)
         painter.end()
 
     def _sides(self, block) -> tuple[bool, bool]:
@@ -2038,7 +2090,7 @@ class DiffView(QWidget):
         self.right.setVisible(not unified)
         self.gutter.setVisible(not unified)
         self.unified.setVisible(unified)
-        self.gutter.setFixedWidth(44 if layout == "fluid" else Gutter.WIDTH)
+        self.gutter.setFixedWidth(64 if layout == "fluid" else Gutter.WIDTH)
         self._layout_changed()
         if s.rows:
             self.scroll_to(s.display_of(s.cursor) - int(self._lead().visible_rows() * LANDING))
@@ -2113,7 +2165,8 @@ class DiffView(QWidget):
         caret's; everything else (Ctrl+S, Alt+arrows, F-keys) goes on to the
         ordinary keys below."""
         s = self.state
-        if not s.typing or s.layout != "sbs" or s.caret_at is None or not s.rows:
+        if not s.typing or s.layout not in ("sbs", "fluid") or s.caret_at is None \
+                or not s.rows:
             return False
         key = event.key()
         mods = event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier)

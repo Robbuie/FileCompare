@@ -21,9 +21,13 @@ def test_every_id_in_a_menu_or_toolbar_is_a_command():
                 assert item in C.COMMANDS, item
     for groups in C.TOOLBARS.values():
         for group in groups:
+            segmented = group[:1] == (C.SEGMENTED,)
             for item in group:
+                if item in C.MARKERS or item == "position":
+                    continue
                 assert item in C.COMMANDS, item
-                assert C.COMMANDS[item].glyph, f"{item} has no icon for the toolbar"
+                # A segment is words only; every other button has an icon.
+                assert segmented or C.COMMANDS[item].glyph, f"{item} has no icon for the toolbar"
     for owner, spec in C.TOOL_MENUS.items():
         assert owner in C.COMMANDS
         if isinstance(spec, str):

@@ -83,6 +83,25 @@ THEMES: dict[str, dict[str, str]] = {
         "warn": "#f2c14e",
         "sel": "#6cc0ff",
     },
+    # 1.25: File Compare's own default -- cool blue-grey, between "dark" and
+    # "blueprint", chosen from the look mockups. Darker chrome than the panes,
+    # so the code is the brightest surface on screen.
+    "slate": {
+        "bg_0": "#0b0e13",
+        "bg_1": "#0d1116",
+        "bg_2": "#11151b",
+        "bg_3": "#1b212a",
+        "bg_4": "#262e3a",
+        "line": "#222934",
+        "line_soft": "#1a2029",
+        "txt_0": "#e4e8ee",
+        "txt_1": "#aeb7c4",
+        "txt_2": "#8792a2",
+        "info": "#7cb7ff",
+        "good": "#46c98b",
+        "warn": "#e8b35a",
+        "sel": "#7cb7ff",
+    },
     # Not a style, an accessibility target. Every border is a visible line
     # rather than a hint, and the muted grey is lifted until it passes as body
     # text, because in this theme it is being read rather than skimmed.
@@ -109,6 +128,7 @@ THEME_LABELS: dict[str, str] = {
     "light": "Light",
     "paper": "Warm paper",
     "blueprint": "Blueprint",
+    "slate": "Slate",
     "contrast": "High contrast",
 }
 
@@ -125,6 +145,8 @@ ACCENTS: dict[str, tuple[int, int, int]] = {
     "cyan": (54, 191, 210),
     "blue": (74, 145, 255),
     "violet": (154, 122, 255),
+    # 1.25: Slate's own accent, a lighter blue that reads on its dark chrome.
+    "sky": (124, 183, 255),
 }
 
 ACCENT_LABELS: dict[str, str] = {
@@ -134,6 +156,7 @@ ACCENT_LABELS: dict[str, str] = {
     "cyan": "Cyan",
     "blue": "Drafting blue",
     "violet": "Violet",
+    "sky": "Sky blue",
 }
 
 #: Alpha for each derived tint of the accent.

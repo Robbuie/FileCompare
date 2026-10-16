@@ -101,13 +101,14 @@ def test_config_rejects_unknown_keys(tmp_path):
 def test_a_corrupt_settings_file_is_not_fatal(tmp_path):
     path = tmp_path / "c.json"
     path.write_text("{ not json")
-    assert Config.load(str(path)).get("theme") == "dark"
+    assert Config.load(str(path)).get("theme") == "slate"
 
 
 def test_follows_file_manager_when_it_can(tmp_path):
     theirs = tmp_path / "fm.json"
     theirs.write_text(json.dumps({"theme": "blueprint", "accent": "amber"}))
     config = Config(path=str(tmp_path / "c.json"))
+    config.set("look.follow_file_manager", True)      # 1.25: off by default
     look, source = appearance.resolve(config, file_manager=appearance.file_manager_look(str(theirs)))
     assert source == "file manager"
     assert look == {"theme": "blueprint", "accent": "amber", "density": "normal"}

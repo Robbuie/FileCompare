@@ -227,12 +227,26 @@ QToolButton[role="tool"] {{
     border: 1px solid transparent;
     border-radius: {radius};
     color: {txt_0};
-    padding: 3px 6px 2px 6px;
-    min-width: 46px;
-    min-height: 0px;
-    font-size: {tool_font};
+    padding: 0px 9px;
+    min-height: 28px;
+    font-size: {ui_font};
 }}
-QToolButton[role="tool"][menu="true"] {{ padding-right: 16px; }}
+QToolButton[role="tool"][menu="true"] {{ padding-right: 20px; }}
+/* 1.25: a segmented control -- one of its words is on */
+QWidget[role="segment"] {{ background: {bg_3}; border-radius: 8px; }}
+QToolButton[role="segbtn"] {{
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: {txt_2};
+    padding: 0px 11px;
+    min-height: 26px;
+    font-size: {ui_font};
+}}
+QToolButton[role="segbtn"]:hover {{ color: {txt_0}; }}
+QToolButton[role="segbtn"]:checked {{ background: {bg_4}; color: {txt_0}; font-weight: 600; }}
+QToolButton[role="segbtn"]:disabled {{ color: {txt_2}; }}
+QLabel[role="toolpos"] {{ color: {txt_1}; padding: 0px 8px; min-width: 96px; }}
 QToolButton[role="tool"]:hover {{ background: {bg_3}; }}
 QToolButton[role="tool"]:pressed {{ background: {bg_4}; }}
 QToolButton[role="tool"]:checked {{ background: {accent_soft}; border: 1px solid {accent_line}; color: {accent_text}; }}
@@ -244,14 +258,26 @@ QFrame[role="tooldiv"] {{ background: {line}; border: none; margin: 6px 0px; }}
 QLabel[role="position"] {{ color: {txt_1}; padding: 0px 10px; }}
 
 /* 1.19: the differences list and the location bar. */
-QWidget[role="sidebar"] {{ background: transparent; }}
+/* 1.25: docked flush on the right, with a heading, a chip per kind and a
+   fold button; folded, a 40px rail with the counts. */
+QWidget[role="sidebar"] {{ background: {bg_1}; border-left: 1px solid {line}; }}
+QWidget[role="diffrail"] {{ background: {bg_1}; border-left: 1px solid {line}; }}
 QTreeWidget[role="difflist"] {{
-    background: {bg_2};
-    border: 1px solid {line_soft};
-    border-radius: {radius_lg};
+    background: transparent;
+    border: none;
+    border-top: 1px solid {line_soft};
     outline: none;
     padding: 4px 0px;
 }}
+QLabel[role="listtitle"] {{ color: {txt_0}; font-weight: 600; background: transparent; }}
+QLabel[role="count_all"] {{ color: {txt_2}; background: {bg_3}; border-radius: 9px; padding: 1px 7px; }}
+QLabel[role="count_chg"] {{ color: {diff_chg_bar}; background: {diff_chg_row}; border-radius: 9px; padding: 2px 8px; }}
+QLabel[role="count_add"] {{ color: {diff_add_bar}; background: {diff_add_row}; border-radius: 9px; padding: 2px 8px; }}
+QLabel[role="count_del"] {{ color: {diff_del_bar}; background: {diff_del_row}; border-radius: 9px; padding: 2px 8px; }}
+QWidget[role="diffrail"] QLabel {{ padding: 3px 0px; border-radius: 6px; font-weight: 600; }}
+QToolButton[role="fold"] {{ background: transparent; border: none; border-radius: 6px; color: {txt_2};
+    min-width: 26px; min-height: 26px; font-size: 15px; }}
+QToolButton[role="fold"]:hover {{ background: {bg_3}; color: {txt_0}; }}
 QLabel[role="location"] {{
     background: {bg_1};
     color: {txt_1};
@@ -343,10 +369,12 @@ QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 /* A comparison is a card on the backdrop, like a File Manager pane: the
    radius is the container's, larger than a control's, so the buttons inside
    do not read as the same flat object. */
+/* 1.25: flush -- the comparison fills the window edge to edge, divided by
+   lines rather than floating as a rounded card. */
 QFrame[role="card"] {{
     background: {bg_2};
-    border: 1px solid {line_soft};
-    border-radius: {radius_lg};
+    border: none;
+    border-radius: 0px;
 }}
 QFrame[role="card"] QLabel {{ background: transparent; }}
 QWidget[role="toolrow"] {{ background: transparent; }}

@@ -158,6 +158,8 @@ class MainWindow(QMainWindow):
         self._position.setProperty("role", "position")
         self.statusBar().addWidget(self._status_left, 1)
         self.statusBar().addPermanentWidget(self._position)
+        # 1.25: shown in the command row now, between Previous and Next.
+        self._position.hide()
         self.statusBar().addPermanentWidget(self._status_right)
         self.statusBar().setSizeGripEnabled(False)
 
@@ -512,7 +514,7 @@ class MainWindow(QMainWindow):
 
     def _colours(self) -> str:
         value = self._config.get("view.colours")
-        return value if value in ("classic", "family") else "classic"
+        return value if value in ("modern", "classic", "family") else "modern"
 
     def _set_colours(self, value: str) -> None:
         self._config.set("view.colours", value)
@@ -626,6 +628,10 @@ class MainWindow(QMainWindow):
         "updates-on-launch"})
 
     def command_state(self, id_: str) -> State:
+        if id_ == "position":
+            # 1.25: the command row's "Difference 2 of 7", from the page.
+            count = getattr(self._page(), "count", None)
+            return State(label=count.text() if count is not None else "")
         if id_ in self.WINDOW:
             config = self._config
             checked = {
@@ -701,7 +707,8 @@ class MainWindow(QMainWindow):
             return
         if name == "colours":
             group = QActionGroup(menu)
-            for value, label in (("classic", "Classic: every difference in red"),
+            for value, label in (("modern", "Modern: changed amber, left coral, right blue"),
+                                 ("classic", "Classic: every difference in red"),
                                  ("family", "Family: changed amber, left red, right green")):
                 action = QAction(label, menu)
                 action.setCheckable(True)

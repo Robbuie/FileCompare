@@ -25,12 +25,15 @@ def _home() -> str:
 
 
 DEFAULTS: dict[str, Any] = {
-    "theme": "dark",
-    "accent": "blue",
+    # 1.25: the redesign's own look by default. File Manager has no Slate,
+    # so following its look is now something to turn on (View > Follow File
+    # Manager's look) rather than the default.
+    "theme": "slate",
+    "accent": "sky",
     "density": "normal",
     # Take theme, accent and density from File Manager's settings, so the
     # two change together. Read once at startup, never written.
-    "look.follow_file_manager": True,
+    "look.follow_file_manager": False,
 
     "window.width": 1400,
     "window.height": 860,
@@ -49,7 +52,9 @@ DEFAULTS: dict[str, Any] = {
     "view.syntax": True,
     # 1.18: "classic" (every difference in one red, Beyond Compare's way) or
     # "family" (amber changed, red left only, green right only).
-    "view.colours": "classic",
+    # 1.25: "modern" (amber changed, blue right only, coral left only), the
+    # redesign's palette and the default.
+    "view.colours": "modern",
     # 1.18: the text view's show filter -- "all", "diffs", "same" or
     # "context" -- the lines of context kept around each difference, and
     # whether the line details panel is open under the panes.
@@ -60,7 +65,8 @@ DEFAULTS: dict[str, Any] = {
     # "sbs" (side by side), "fluid" (no filler rows, bands between the
     # sides) or "unified" (one column).
     "view.sidebar": True,
-    "view.layout": "sbs",
+    # 1.25: "fluid" -- the redesign's linked panes -- by default.
+    "view.layout": "fluid",
     # 1.23: click into a side and type, as in Beyond Compare (Ctrl+E).
     "view.typing": False,
 

@@ -40,6 +40,7 @@ HUES: dict[str, tuple[int, int, int]] = {
 #: (row wash, intraline mark) as the share of the hue in the mix.
 STRENGTH: dict[str, tuple[float, float]] = {
     "dark": (0.13, 0.36),
+    "slate": (0.12, 0.38),
     "blueprint": (0.14, 0.38),
     "light": (0.15, 0.36),
     "paper": (0.15, 0.36),
@@ -52,8 +53,20 @@ KINDS = tuple(HUES)
 #: Beyond Compare's way, chosen by the user as the default: every difference
 #: in one red, whichever side it is on, and a file on one side only of a
 #: folder compare in violet. Moved blocks and conflicts keep their own hue.
-PALETTES = ("classic", "family")
+PALETTES = ("modern", "classic", "family")
 CLASSIC_RED = (222, 60, 60)
+
+#: 1.25: "modern", the redesign's palette and the new default. Amber changed,
+#: blue only on the right, coral only on the left: told apart by lightness as
+#: well as hue, so it survives red-green colour blindness, which classic red
+#: and family's red-and-green do not. The intraline mark is the hue itself,
+#: nearly solid, with the text drawn dark on it -- a changed character is the
+#: thing to see first.
+MODERN: dict[str, tuple[int, int, int]] = {
+    "chg": (232, 179, 90),
+    "add": (90, 169, 240),
+    "del": (239, 127, 106),
+}
 
 
 def build(tokens: dict[str, str], palette: str = "classic") -> dict[str, str]:
@@ -62,11 +75,17 @@ def build(tokens: dict[str, str], palette: str = "classic") -> dict[str, str]:
     row, mark = STRENGTH.get(theme, STRENGTH["dark"])
     surface = qss.unhex(tokens["bg_2"])
     classic = palette == "classic"
+    modern = palette == "modern"
     hues = dict(HUES)
     if classic:
         for kind in ("add", "del", "chg"):
             hues[kind] = CLASSIC_RED
-    out: dict[str, str] = {"diff_palette": "classic" if classic else "family"}
+    if modern:
+        hues.update(MODERN)
+        row = min(row, 0.11)
+        mark = 0.85
+    out: dict[str, str] = {"diff_palette": "classic" if classic else
+                           ("modern" if modern else "family")}
     dark = sum(surface) < 382
     # The ink a classic difference is written in: the red, pulled toward
     # the text colour of the theme so it reads as text and not as a wash.
@@ -95,6 +114,9 @@ def build(tokens: dict[str, str], palette: str = "classic") -> dict[str, str]:
     roles = {"dir_left": "moved" if classic else "del",
              "dir_right": "moved" if classic else "add",
              "dir_newer": "chg"}
+    # Text drawn on a modern mark: the pane's own surface, so a changed
+    # character reads as a dark letter on its hue.
+    out["diff_mark_ink"] = tokens["bg_2"] if modern else ""
     for role, kind in roles.items():
         for part in ("bar", "row"):
             out[f"{role}_{part}"] = out[f"diff_{kind}_{part}"]

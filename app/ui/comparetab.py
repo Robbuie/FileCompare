@@ -50,7 +50,7 @@ from app.io.load import LABELS
 from app.io.longpath import display
 from app.ui import glyphs
 from app.ui.commands import HIDDEN, State
-from app.ui.diffsidebar import DiffSidebar, Entry
+from app.ui.diffsidebar import DiffRail, DiffSidebar, Entry
 from app.ui.diffview import DiffView
 from app.ui.folderview import FolderView
 from app.ui.hexview import HexView
@@ -670,25 +670,36 @@ class CompareTab(QWidget):
         inner.addWidget(self.location)
         inner.addWidget(self.stack, 1)
         # 1.19: every difference in a list beside the card.
+        # 1.25: docked on the right, and folding to a thin bar (DiffRail)
+        # that keeps the counts, rather than disappearing.
         self.sidebar = DiffSidebar()
         self.sidebar.goTo.connect(self._go_block)
+        self.sidebar.fold.connect(lambda: self.run_command("sidebar"))
+        self.rail = DiffRail()
+        self.rail.unfold.connect(lambda: self.run_command("sidebar"))
+        self.rail.hide()
         self._sidebar_on = bool(session.options.sidebar)
         self._outline_for = None
         self._sections: tuple = (None, None)
         self.split = QSplitter(Qt.Horizontal)
         self.split.setChildrenCollapsible(False)
-        self.split.addWidget(self.sidebar)
         self.split.addWidget(card)
-        self.split.setStretchFactor(0, 0)
-        self.split.setStretchFactor(1, 1)
-        self.split.setSizes([270, 1100])
+        self.split.addWidget(self.sidebar)
+        self.split.setStretchFactor(0, 1)
+        self.split.setStretchFactor(1, 0)
+        self.split.setSizes([1100, 280])
         self.sidebar.hide()
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addWidget(self.split, 1)
+        body.addWidget(self.rail)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 6, 8, 0)
-        outer.setSpacing(6)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
         outer.addWidget(self.find)
-        outer.addWidget(self.split, 1)
+        outer.addLayout(body, 1)
 
         session.changed.connect(self.refresh)
         session.saved.connect(self._saved)
@@ -805,9 +816,13 @@ class CompareTab(QWidget):
                              else "layout-unified")
         elif name == "sidebar":
             self.run_command("sidebar")
-        elif name in ("edit", "insert-line", "delete-lines", "align") \
-                and self.view.state.layout != "sbs":
-            self.status.emit("Editing and aligning are in Side by side (View > Side by side)")
+        elif (name in ("edit", "align") and self.view.state.layout != "sbs") or \
+                (name in ("insert-line", "delete-lines")
+                 and self.view.state.layout not in ("sbs", "fluid")):
+            # 1.25: inserting and deleting lines work in Linked too; the line
+            # editor and pins are drawn on Aligned's rows, so they stay there.
+            self.status.emit("The line editor and aligning are in Aligned (View > Aligned "
+                             "side by side); Ctrl+E types in Linked too")
         elif name == "edit":
             if self._can_edit(side) and self._current_or_say():
                 self.view.begin_edit()
@@ -1483,7 +1498,8 @@ class CompareTab(QWidget):
     def _show_sidebar(self) -> None:
         text = self.stack.currentWidget() is self.view and self.session.result is not None
         self.sidebar.setVisible(text and self._sidebar_on)
-        if text and self._sidebar_on:
+        self.rail.setVisible(text and not self._sidebar_on)
+        if text:
             self._fill_sidebar()
 
     def _outline(self) -> tuple:
@@ -1548,6 +1564,12 @@ class CompareTab(QWidget):
         if len(result.blocks) > self.LIST_LIMIT:
             listed.append((f"First {self.LIST_LIMIT:,} of {len(result.blocks):,} listed", []))
         self.sidebar.set_entries(key, listed)
+        counts = {"chg": 0, "add": 0, "del": 0}
+        for block in result.blocks:
+            if block.significant:
+                counts[{A.DELETED: "del", A.INSERTED: "add"}.get(block.kind, "chg")] += 1
+        self.sidebar.set_counts(counts)
+        self.rail.set_counts(counts)
 
     def _summaries(self) -> tuple[bool, list[tuple[str, str, str]]]:
         """Per difference: (section, where, what), for the list and for
@@ -2410,14 +2432,16 @@ class CompareTab(QWidget):
         if id_ == "copy-all-right":
             return State(enabled=has and editable[1])
         if id_ in ("edit", "insert-line", "delete-lines", "align"):
-            if layout != "sbs":
-                return State(enabled=False, tip="Editing and aligning are in Side by side")
+            if layout != "sbs" and not (layout == "fluid"
+                                        and id_ in ("insert-line", "delete-lines")):
+                return State(enabled=False, tip="The line editor and aligning are in Aligned")
             if id_ == "align":
                 return State(enabled=result is not None)
             return State(enabled=side.editable and bool(self.view.state.rows))
         if id_ == "typing":
-            return State(checked=self.view.state.typing, enabled=layout == "sbs",
-                         tip="" if layout == "sbs" else "Typing is in Side by side")
+            here = layout in ("sbs", "fluid")
+            return State(checked=self.view.state.typing, enabled=here,
+                         tip="" if here else "Typing is in Aligned and Linked")
         if id_ in ("save-left", "save-right"):
             index = 0 if id_ == "save-left" else 1
             other = s.sides[index]

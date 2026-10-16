@@ -18,7 +18,10 @@ from dataclasses import dataclass
 from PySide6.QtCore import QRect, QSize, Qt, Signal
 from PySide6.QtGui import QFont, QFontMetrics, QPainter
 from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
     QLineEdit,
+    QToolButton,
     QStyle,
     QStyledItemDelegate,
     QTreeWidget,
@@ -112,16 +115,88 @@ class _Delegate(QStyledItemDelegate):
         painter.restore()
 
 
+def _chip(role: str) -> QLabel:
+    label = QLabel()
+    label.setProperty("role", role)
+    label.setAlignment(Qt.AlignCenter)
+    return label
+
+
+class DiffRail(QWidget):
+    """1.25: the differences list folded away -- a thin bar on the right edge
+    that still says how many of each there are, and opens the list again."""
+
+    unfold = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setProperty("role", "diffrail")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setFixedWidth(40)
+        self.button = QToolButton()
+        self.button.setProperty("role", "fold")
+        self.button.setText("\u00ab")
+        self.button.setToolTip("Show the differences list (Ctrl+Shift+D)")
+        self.button.setFocusPolicy(Qt.NoFocus)
+        self.button.clicked.connect(self.unfold)
+        self.chips = {kind: _chip(f"count_{kind}") for kind in ("chg", "add", "del")}
+        box = QVBoxLayout(self)
+        box.setContentsMargins(6, 6, 6, 6)
+        box.setSpacing(6)
+        box.addWidget(self.button, 0, Qt.AlignHCenter)
+        for chip in self.chips.values():
+            chip.setFixedWidth(26)
+            box.addWidget(chip, 0, Qt.AlignHCenter)
+        box.addStretch(1)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        self.unfold.emit()
+
+    def set_counts(self, counts: dict[str, int]) -> None:
+        for kind, chip in self.chips.items():
+            chip.setText(str(counts.get(kind, 0)))
+            chip.setVisible(bool(counts.get(kind)))
+            chip.setToolTip({"chg": "changed", "add": "only on the right",
+                             "del": "only on the left"}[kind])
+
+
 class DiffSidebar(QWidget):
-    """Emits `goTo(block)` when a difference is clicked."""
+    """Emits `goTo(block)` when a difference is clicked, and `fold` when its
+    fold button is pressed (1.25)."""
 
     goTo = Signal(int)
+    fold = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setProperty("role", "sidebar")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.tokens: dict[str, str] = {}
+        # 1.25: a heading with the count and the fold button, then a chip
+        # per kind, as in the mockup the redesign was chosen from.
+        self.title = QLabel("Differences")
+        self.title.setProperty("role", "listtitle")
+        self.total = _chip("count_all")
+        self.fold_button = QToolButton()
+        self.fold_button.setProperty("role", "fold")
+        self.fold_button.setText("\u00bb")
+        self.fold_button.setToolTip("Fold the list away (Ctrl+Shift+D)")
+        self.fold_button.setFocusPolicy(Qt.NoFocus)
+        self.fold_button.clicked.connect(self.fold)
+        head = QHBoxLayout()
+        head.setContentsMargins(14, 0, 4, 0)
+        head.setSpacing(8)
+        head.addWidget(self.title)
+        head.addWidget(self.total)
+        head.addStretch(1)
+        head.addWidget(self.fold_button)
+        self.chips = {kind: _chip(f"count_{kind}") for kind in ("chg", "add", "del")}
+        chips = QHBoxLayout()
+        chips.setContentsMargins(12, 0, 12, 0)
+        chips.setSpacing(6)
+        for chip in self.chips.values():
+            chips.addWidget(chip)
+        chips.addStretch(1)
         self.filter = QLineEdit()
         self.filter.setProperty("role", "pathbox")
         self.filter.setPlaceholderText("Filter differences")
@@ -138,9 +213,14 @@ class DiffSidebar(QWidget):
         self.tree.setFocusPolicy(Qt.NoFocus)
         self.tree.itemClicked.connect(self._clicked)
         box = QVBoxLayout(self)
-        box.setContentsMargins(6, 6, 0, 6)
-        box.setSpacing(6)
-        box.addWidget(self.filter)
+        box.setContentsMargins(0, 8, 0, 6)
+        box.setSpacing(8)
+        box.addLayout(head)
+        box.addLayout(chips)
+        filters = QHBoxLayout()
+        filters.setContentsMargins(10, 0, 10, 0)
+        filters.addWidget(self.filter)
+        box.addLayout(filters)
         box.addWidget(self.tree, 1)
         self._items: dict[int, QTreeWidgetItem] = {}
         self._key = None
@@ -186,6 +266,15 @@ class DiffSidebar(QWidget):
 
     def count(self) -> int:
         return len(self._items)
+
+    def set_counts(self, counts: dict[str, int]) -> None:
+        """How many of each kind (1.25): the chips under the heading."""
+        words = {"chg": "changed", "add": "only right", "del": "only left"}
+        for kind, chip in self.chips.items():
+            n = counts.get(kind, 0)
+            chip.setText(f"{n:,} {words[kind]}")
+            chip.setVisible(bool(n))
+        self.total.setText(f"{sum(counts.get(k, 0) for k in words):,}")
 
     def _clicked(self, item: QTreeWidgetItem, _column: int) -> None:
         entry: Entry = item.data(0, ROLE)

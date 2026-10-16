@@ -128,18 +128,21 @@ COMMANDS: dict[str, Command] = {c.id: c for c in (
        "Previous conflict (Ctrl+Alt+Up)"),
     # View, text
     _c("view-all", "All lines", "", "show_all", "All", "Show every line", True),
-    _c("view-diffs", "Differences only", "", "show_diffs", "Diffs",
+    _c("view-diffs", "Differences only", "", "show_diffs", "Changes",
        "Show only the lines that differ", True),
     _c("view-same", "Matching lines only", "", "show_same", "Same",
        "Show only the lines that match", True),
     _c("view-context", "Differences with context", "", "show_context", "Context",
        "Show the differences with a few lines around each", True),
-    _c("layout-sbs", "Side by side", "", "layout_sbs", "Side by side",
+    _c("layout-sbs", "Aligned side by side", "", "layout_sbs", "Aligned",
        "The two files side by side, matching lines on the same row", True),
-    _c("layout-fluid", "Fluid", "", "layout_fluid", "Fluid",
+    _c("layout-fluid", "Linked side by side", "", "layout_fluid", "Linked",
        "The two files side by side without filler rows, joined by bands", True),
-    _c("layout-unified", "Unified", "Ctrl+Shift+I", "layout_unified", "Unified",
+    _c("layout-unified", "Inline", "Ctrl+Shift+I", "layout_unified", "Inline",
        "One column: each change with the old lines above the new", True),
+    # 1.25: "Difference 2 of 7" in the command row. Not a button: the
+    # toolbar draws it as text between Previous and Next.
+    _c("position", "Where you are", "", "", "", ""),
     _c("details", "Line details", "", "", "", "The current line of each side, one above the other",
        True),
     _c("sidebar", "Differences list", "Ctrl+Shift+D", "outline", "List",
@@ -285,30 +288,39 @@ ONLY: dict[str, frozenset[str]] = {
     **{name: frozenset({"merge"}) for name in ("next-conflict", "previous-conflict")},
 }
 
-#: The toolbar for each kind of page: groups of command ids, a divider
-#: between groups. A button whose command has a menu in TOOL_MENUS gets an
-#: arrow beside it.
+#: 1.25: markers that open a toolbar group instead of naming a command.
+#: SEGMENTED: the group is one segmented control, words only, one of them on;
+#: STRETCH: the group is the gap that pushes what follows to the right;
+#: ICONS: the group's buttons show their icon only, the words in the tip.
+SEGMENTED = "="
+STRETCH = "~"
+ICONS = "."
+MARKERS = (SEGMENTED, STRETCH, ICONS)
+
+#: The command row for each kind of page (1.25: one row, icon beside word,
+#: so no label is ever cut short): groups of command ids, a divider between
+#: groups. A button whose command has a menu in TOOL_MENUS gets an arrow.
 TOOLBARS: dict[str, tuple[tuple[str, ...], ...]] = {
-    "text": (("new", "open-session"),
-             ("view-all", "view-diffs", "view-same", "view-context"),
-             ("layout-sbs", "layout-fluid", "layout-unified"),
-             ("rules", "structure", "compare-as", "sidebar"),
-             ("copy-left", "copy-right", "typing", "edit"),
-             ("previous", "next"),
-             ("swap", "reload", "save")),
-    "other": (("new", "open-session"),
-              ("compare-as",),
-              ("previous", "next"),
-              ("swap", "reload")),
-    "folder": (("new", "open-session"),
-               ("show-all", "show-diffs", "show-left", "show-right", "show-same"),
-               ("folder-trees", "folder-list"),
-               ("contents",),
+    "text": ((SEGMENTED, "layout-sbs", "layout-fluid", "layout-unified"),
+             (SEGMENTED, "view-all", "view-diffs", "view-same", "view-context"),
+             ("copy-left", "copy-right", "typing"),
+             (STRETCH,),
+             (ICONS, "previous"), ("position",), (ICONS, "next"),
+             ("compare-as", "structure", "rules", "sidebar"),
+             (ICONS, "swap", "reload"),
+             ("save",)),
+    "other": (("compare-as",),
+              (STRETCH,),
+              (ICONS, "previous"), ("position",), (ICONS, "next"),
+              (ICONS, "swap", "reload")),
+    "folder": ((SEGMENTED, "show-all", "show-diffs", "show-left", "show-right", "show-same"),
+               (SEGMENTED, "folder-trees", "folder-list"),
                ("copy-left", "copy-right", "sync"),
-               ("expand", "collapse"),
-               ("reload", "swap")),
-    "merge": (("new", "open-session"),
-              ("previous-conflict", "next-conflict"),
+               (STRETCH,),
+               ("contents", "expand", "collapse"),
+               (ICONS, "swap", "reload")),
+    "merge": ((ICONS, "previous-conflict"), ("position",), (ICONS, "next-conflict"),
+              (STRETCH,),
               ("save",)),
     "start": (("new", "open-session"),),
 }

@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.25.0 - the new look, part one: Slate, one command row, linked panes
+
+The look chosen from the mockups (D and E together), for text comparisons.
+Folder comparisons follow in the next version.
+
+- **Slate**, a new cool blue-grey dark theme with a Sky blue accent, is the
+  default. The code is the brightest surface; the chrome around it is darker.
+  The others are still under View > Theme.
+- **Modern difference colours**, now the default: amber where both sides
+  differ, blue for lines only on the right, coral for lines only on the
+  left. The characters that differ are drawn dark on a solid mark, so the
+  changed letter is the first thing you see. Told apart by lightness as well
+  as colour, so they hold up for red-green colour blindness. Classic red and
+  Family are still under View > Difference colours.
+- **One command row instead of the tall toolbar.** Each button has its icon
+  beside its word, so nothing is cut short any more. The layouts and the
+  show filter are segmented switches: Aligned / Linked / Inline, and
+  All / Changes / Same / Context. "Difference 2 of 7" sits between Previous
+  and Next. Home and Sessions are in the Session menu and the box at the
+  top right.
+- **Linked is the default layout** (it was called Fluid): each side shows
+  only its own lines, with coloured bands joining what matches, in a wider
+  gutter. Side by side is now called Aligned, Unified is now Inline.
+- **Typing in the panes (Ctrl+E) works in Linked** as well as Aligned, and
+  so do Insert line and Delete lines. The line editor (F2) and aligning
+  lines stay in Aligned.
+- **The differences list is docked on the right.** A heading shows the total, chips
+  show how many changed, only right and only left, and the fold button tucks
+  it into a thin bar that keeps the counts. Click the bar, or Ctrl+Shift+D,
+  to open it again.
+- **The overview strip** down the right edge is wider, with a lane for each
+  side, the current difference outlined, and the part on screen boxed in
+  the accent.
+- The comparison now fills the window edge to edge instead of sitting in a
+  rounded card.
+- **Following File Manager's look is now off by default**, since File
+  Manager has no Slate theme. View > Follow File Manager's look turns it
+  back on.
+
 ## 1.24.0 - Logix files open as ladder
 
 - **An L5X or L5K pair opens as ladder**, left file's rungs opposite the
